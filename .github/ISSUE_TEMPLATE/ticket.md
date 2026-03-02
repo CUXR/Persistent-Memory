@@ -1,3 +1,11 @@
+---
+name: Task Ticket
+about: Standard engineering task
+title: ""
+labels: task
+assignees: ""
+---
+
 ## Summary
 Short description of the task.
 
