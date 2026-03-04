@@ -62,3 +62,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project-local docs/agent metadata
+AGENTS.md
+egomem paper.pdf

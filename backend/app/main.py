@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from app.api.routes import users
+from .api.routes import user
 
 app = FastAPI()
 
-app.include_router(users.router, prefix="/users", tags=["users"])
+app.include_router(user.router, prefix="/users", tags=["users"])
