@@ -1,23 +1,22 @@
-"""
-backend/app/crud/memory_store.py
---------------------------------
-Typed SQLAlchemy service for all memory operations.
-
-Deterministic data access only.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+from decimal import Decimal
 from typing import Optional
+from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import create_engine, delete, func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, sessionmaker
-from sqlalchemy import create_engine
 
+from ..core.config import get_settings
+from ..core.database import Base
+from ..models.episode import Episode
+from ..models.memory import Alias, Edge, EpisodeParticipant, Pref, Summary
+from ..models.person import Person, PersonFact
+from ..models.user import User
 from ..schema.memory import (
     EdgeIn,
     EdgeOut,
@@ -32,9 +31,9 @@ from ..schema.memory import (
     SummaryIn,
     SummaryOut,
 )
-from ..models.memory import Alias, Base, Edge, Episode, EpisodeParticipant, Fact, Person, Pref, Summary
 
 logger = logging.getLogger("app.crud.memory_store")
+settings = get_settings()
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -45,22 +44,41 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat()
 
 
+def _decimal(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
+
+
+def _float(value: Decimal | None) -> float:
+    if value is None:
+        return 1.0
+    return float(value)
+
+
+def _split_name(name: str) -> tuple[str, str, str]:
+    cleaned = name.strip()
+    parts = cleaned.split(maxsplit=1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+    return first_name, last_name, cleaned
+
+
 class MemoryStore:
-    """
-    Typed, validated access to memory data via SQLAlchemy.
+    """Typed, deterministic memory access layer over the project schema."""
 
-    Public methods match the project spec method signatures and use Pydantic
-    input models internally for validation.
-    """
+    def __init__(self, db_url: str | None = None, owner_user_id: UUID | None = None) -> None:
+        """Create a store bound to an optional database URL and owner user."""
 
-    def __init__(self, db_url: str = "sqlite+pysqlite:///:memory:") -> None:
-        self._db_url = db_url
+        self._db_url = db_url or settings.database_url
+        self._owner_user_id = owner_user_id
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
-        logger.info("MemoryStore created (db_url=%s)", db_url)
+        logger.info("MemoryStore created (db_url=%s)", self._db_url)
 
     def initialize(self, create_schema: bool = True) -> None:
-        """Initialize engine/session factory and optionally create tables."""
+        """Initialize the SQLAlchemy engine and create tables when requested."""
+
         self._engine = create_engine(self._db_url, future=True)
         self._Session = sessionmaker(
             bind=self._engine,
@@ -73,7 +91,8 @@ class MemoryStore:
         logger.info("Database initialized")
 
     def close(self) -> None:
-        """Dispose SQLAlchemy engine."""
+        """Dispose the SQLAlchemy engine and clear the session factory."""
+
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
@@ -82,11 +101,12 @@ class MemoryStore:
 
     @property
     def Session(self) -> sessionmaker[Session]:
+        """Return the configured session factory after initialization."""
+
         if self._Session is None:
             raise RuntimeError("MemoryStore not initialized - call .initialize() first")
         return self._Session
 
-#updates keys and persona90, replaces aliases as full set, returns a PersonOut
     def upsert_person(
         self,
         name: str,
@@ -95,6 +115,8 @@ class MemoryStore:
         voice_key: Optional[str] = None,
         persona90: Optional[list[float]] = None,
     ) -> PersonOut:
+        """Create or update an interlocutor and replace their alias set."""
+
         data = PersonIn(
             name=name,
             aliases=aliases,
@@ -107,20 +129,28 @@ class MemoryStore:
         with self.Session() as session:
             try:
                 with session.begin():
+                    owner = self._get_or_create_owner(session)
                     person = session.scalar(
-                        select(Person).where(func.lower(Person.name) == data.name.lower())
+                        select(Person).where(
+                            Person.user_id == owner.id,
+                            func.lower(func.coalesce(Person.display_name, "")) == data.name.lower(),
+                        )
                     )
 
                     if person is None:
+                        first_name, last_name, display_name = _split_name(data.name)
                         person = Person(
-                            name=data.name,
+                            user_id=owner.id,
+                            first_name=first_name,
+                            last_name=last_name,
+                            display_name=display_name,
                             face_key=data.face_key,
                             voice_key=data.voice_key,
                             persona90=data.persona90,
                         )
                         session.add(person)
                         session.flush()
-                        logger.debug("Inserted person id=%d name=%s", person.id, data.name)
+                        logger.debug("Inserted person id=%s name=%s", person.id, data.name)
                     else:
                         if data.face_key is not None:
                             person.face_key = data.face_key
@@ -128,9 +158,13 @@ class MemoryStore:
                             person.voice_key = data.voice_key
                         if persona_supplied:
                             person.persona90 = data.persona90
+                        first_name, last_name, display_name = _split_name(data.name)
+                        person.first_name = first_name
+                        person.last_name = last_name
+                        person.display_name = display_name
                         person.updated_at = datetime.now(timezone.utc)
                         session.flush()
-                        logger.debug("Updated person id=%d name=%s", person.id, data.name)
+                        logger.debug("Updated person id=%s name=%s", person.id, data.name)
 
                     session.execute(delete(Alias).where(Alias.person_id == person.id))
                     for alias in data.aliases:
@@ -141,17 +175,21 @@ class MemoryStore:
                 raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
 
     def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
+        """Resolve a person by display name or any case-insensitive alias."""
+
         cleaned = text.strip()
         if not cleaned:
             return None
 
         with self.Session() as session:
+            owner = self._get_or_create_owner(session)
             person = session.scalar(
                 select(Person)
                 .outerjoin(Alias, Alias.person_id == Person.id)
                 .where(
+                    Person.user_id == owner.id,
                     or_(
-                        func.lower(Person.name) == cleaned.lower(),
+                        func.lower(func.coalesce(Person.display_name, "")) == cleaned.lower(),
                         func.lower(Alias.alias) == cleaned.lower(),
                     )
                 )
@@ -162,18 +200,19 @@ class MemoryStore:
                 logger.debug("resolve_person: no match for '%s'", cleaned)
                 return None
 
-            logger.debug("resolve_person: '%s' -> id=%d", cleaned, person.id)
+            logger.debug("resolve_person: '%s' -> id=%s", cleaned, person.id)
             return self._load_person(session, person.id)
 
-#validates times and participant IDs then inserts episode + participants, returns episode id
     def write_episode(
         self,
         time_start: datetime,
         time_end: datetime,
         transcript: str = "",
         summary: str = "",
-        participants: Optional[list[int]] = None,
-    ) -> int:
+        participants: Optional[list[UUID]] = None,
+    ) -> UUID:
+        """Insert an episode for the current owner and all listed participants."""
+
         data = EpisodeIn(
             time_start=time_start,
             time_end=time_end,
@@ -184,40 +223,48 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                self._assert_people_exist(session, data.participant_ids)
+                owner = self._get_or_create_owner(session)
+                ordered_participants = list(dict.fromkeys(data.participant_ids))
+                if not ordered_participants:
+                    raise ValueError("write_episode requires at least one participant")
+                self._assert_people_exist(session, ordered_participants, owner.id)
 
                 episode = Episode(
-                    time_start=data.time_start,
-                    time_end=data.time_end,
+                    user_id=owner.id,
+                    person_id=ordered_participants[0],
+                    start_time=data.time_start,
+                    end_time=data.time_end,
                     transcript=data.transcript,
-                    summary=data.summary,
+                    dialogue_summary=data.summary,
                 )
                 session.add(episode)
                 session.flush()
 
-                for person_id in sorted(set(data.participant_ids)):
+                for person_id in ordered_participants:
                     session.add(EpisodeParticipant(episode_id=episode.id, person_id=person_id))
 
                 episode_id = episode.id
 
             logger.debug(
-                "Wrote episode id=%d (%s -> %s, %d participants)",
+                "Wrote episode id=%s (%s -> %s, %d participants)",
                 episode_id,
                 data.time_start.isoformat(),
                 data.time_end.isoformat(),
-                len(data.participant_ids),
+                len(ordered_participants),
             )
             return episode_id
 
     def write_fact(
         self,
-        person_id: int,
+        person_id: UUID,
         fact_text: str,
         confidence: float = 1.0,
-        episode_id: Optional[int] = None,
+        episode_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
-    ) -> int:
+    ) -> UUID:
+        """Persist a fact about a person, optionally linked to an episode."""
+
         data = FactIn(
             person_id=person_id,
             fact_text=fact_text,
@@ -229,14 +276,15 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                self._assert_person_exists(session, data.person_id)
-                self._assert_episode_exists(session, data.episode_id)
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, data.person_id, owner.id)
+                self._assert_episode_exists(session, data.episode_id, owner.id)
 
-                row = Fact(
+                row = PersonFact(
                     person_id=data.person_id,
                     fact_text=data.fact_text,
-                    confidence=data.confidence,
-                    episode_id=data.episode_id,
+                    confidence=_decimal(data.confidence),
+                    source_episode_id=data.episode_id,
                     valid_from=data.valid_from,
                     valid_to=data.valid_to,
                 )
@@ -244,16 +292,18 @@ class MemoryStore:
                 session.flush()
                 fact_id = row.id
 
-            logger.debug("Wrote fact id=%d for person=%d", fact_id, data.person_id)
+            logger.debug("Wrote fact id=%s for person=%s", fact_id, data.person_id)
             return fact_id
 
     def write_pref(
         self,
-        person_id: int,
+        person_id: UUID,
         pref_text: str,
         confidence: float = 1.0,
-        episode_id: Optional[int] = None,
-    ) -> int:
+        episode_id: Optional[UUID] = None,
+    ) -> UUID:
+        """Persist a preference remembered about a person."""
+
         data = PrefIn(
             person_id=person_id,
             pref_text=pref_text,
@@ -263,30 +313,33 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                self._assert_person_exists(session, data.person_id)
-                self._assert_episode_exists(session, data.episode_id)
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, data.person_id, owner.id)
+                self._assert_episode_exists(session, data.episode_id, owner.id)
 
                 row = Pref(
                     person_id=data.person_id,
                     pref_text=data.pref_text,
-                    confidence=data.confidence,
+                    confidence=_decimal(data.confidence),
                     episode_id=data.episode_id,
                 )
                 session.add(row)
                 session.flush()
                 pref_id = row.id
 
-            logger.debug("Wrote pref id=%d for person=%d", pref_id, data.person_id)
+            logger.debug("Wrote pref id=%s for person=%s", pref_id, data.person_id)
             return pref_id
 
     def write_summary(
         self,
-        person_id: int,
+        person_id: UUID,
         summary_text: str,
         episode_time_start: Optional[datetime] = None,
         episode_time_end: Optional[datetime] = None,
-        episode_id: Optional[int] = None,
-    ) -> int:
+        episode_id: Optional[UUID] = None,
+    ) -> UUID:
+        """Persist a time-bounded summary for a person."""
+
         data = SummaryIn(
             person_id=person_id,
             summary_text=summary_text,
@@ -297,8 +350,9 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                self._assert_person_exists(session, data.person_id)
-                self._assert_episode_exists(session, data.episode_id)
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, data.person_id, owner.id)
+                self._assert_episode_exists(session, data.episode_id, owner.id)
 
                 row = Summary(
                     person_id=data.person_id,
@@ -311,17 +365,19 @@ class MemoryStore:
                 session.flush()
                 summary_id = row.id
 
-            logger.debug("Wrote summary id=%d for person=%d", summary_id, data.person_id)
+            logger.debug("Wrote summary id=%s for person=%s", summary_id, data.person_id)
             return summary_id
 
     def write_edge(
         self,
-        src_id: int,
+        src_id: UUID,
         relation: str,
-        dst_id: int,
+        dst_id: UUID,
         confidence: float = 1.0,
-        episode_id: Optional[int] = None,
-    ) -> int:
+        episode_id: Optional[UUID] = None,
+    ) -> UUID:
+        """Create or update a directed relationship between two people."""
+
         data = EdgeIn(
             src_id=src_id,
             relation=relation,
@@ -332,9 +388,10 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                self._assert_person_exists(session, data.src_id)
-                self._assert_person_exists(session, data.dst_id)
-                self._assert_episode_exists(session, data.episode_id)
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, data.src_id, owner.id)
+                self._assert_person_exists(session, data.dst_id, owner.id)
+                self._assert_episode_exists(session, data.episode_id, owner.id)
 
                 edge = session.scalar(
                     select(Edge).where(
@@ -349,20 +406,20 @@ class MemoryStore:
                         src_id=data.src_id,
                         relation=data.relation,
                         dst_id=data.dst_id,
-                        confidence=data.confidence,
+                        confidence=_decimal(data.confidence),
                         episode_id=data.episode_id,
                     )
                     session.add(edge)
                     session.flush()
                 else:
-                    edge.confidence = data.confidence
+                    edge.confidence = _decimal(data.confidence)
                     edge.episode_id = data.episode_id
                     session.flush()
 
                 edge_id = edge.id
 
             logger.debug(
-                "Wrote edge id=%d: person %d -[%s]-> person %d",
+                "Wrote edge id=%s: person %s -[%s]-> person %s",
                 edge_id,
                 data.src_id,
                 data.relation,
@@ -370,12 +427,17 @@ class MemoryStore:
             )
             return edge_id
 
-    def get_profile_context(self, person_id: int) -> ProfileContext:
+    def get_profile_context(self, person_id: UUID) -> ProfileContext:
+        """Return the deterministic profile context bundle for one person."""
+
         with self.Session() as session:
-            person = self._get_person(session, person_id)
+            owner = self._get_or_create_owner(session)
+            person = self._get_person(session, person_id, owner.id)
 
             facts_rows = session.scalars(
-                select(Fact).where(Fact.person_id == person_id).order_by(Fact.created_at.desc())
+                select(PersonFact)
+                .where(PersonFact.person_id == person_id)
+                .order_by(PersonFact.created_at.desc())
             ).all()
 
             prefs_rows = session.scalars(
@@ -390,7 +452,7 @@ class MemoryStore:
 
             dst_person = aliased(Person)
             edge_rows = session.execute(
-                select(Edge, dst_person.name)
+                select(Edge, func.coalesce(dst_person.display_name, dst_person.first_name))
                 .join(dst_person, dst_person.id == Edge.dst_id)
                 .where(Edge.src_id == person_id)
                 .order_by(Edge.created_at.desc())
@@ -400,8 +462,8 @@ class MemoryStore:
                 FactOut(
                     id=row.id,
                     fact_text=row.fact_text,
-                    confidence=row.confidence,
-                    episode_id=row.episode_id,
+                    confidence=_float(row.confidence),
+                    episode_id=row.source_episode_id,
                     valid_from=_iso(row.valid_from),
                     valid_to=_iso(row.valid_to),
                     created_at=_iso(row.created_at) or "",
@@ -413,7 +475,7 @@ class MemoryStore:
                 PrefOut(
                     id=row.id,
                     pref_text=row.pref_text,
-                    confidence=row.confidence,
+                    confidence=_float(row.confidence),
                     episode_id=row.episode_id,
                     created_at=_iso(row.created_at) or "",
                 )
@@ -437,8 +499,8 @@ class MemoryStore:
                     id=edge.id,
                     relation=edge.relation,
                     dst_id=edge.dst_id,
-                    dst_name=dst_name,
-                    confidence=edge.confidence,
+                    dst_name=dst_name or "",
+                    confidence=_float(edge.confidence),
                     episode_id=edge.episode_id,
                     created_at=_iso(edge.created_at) or "",
                 )
@@ -446,7 +508,7 @@ class MemoryStore:
             ]
 
             logger.debug(
-                "Profile context for person=%d: %d facts, %d prefs, %d summaries, %d edges",
+                "Profile context for person=%s: %d facts, %d prefs, %d summaries, %d edges",
                 person_id,
                 len(facts),
                 len(prefs),
@@ -462,15 +524,15 @@ class MemoryStore:
                 persona90=person.persona90 or [],
             )
 
-    def _load_person(self, session: Session, person_id: int) -> PersonOut:
-        person = self._get_person(session, person_id)
+    def _load_person(self, session: Session, person_id: UUID) -> PersonOut:
+        person = self._get_person(session, person_id, person_user_id=None)
         aliases = session.scalars(
             select(Alias.alias).where(Alias.person_id == person_id).order_by(Alias.alias.asc())
         ).all()
 
         return PersonOut(
             id=person.id,
-            name=person.name,
+            name=person.display_name or person.first_name,
             face_key=person.face_key,
             voice_key=person.voice_key,
             persona90=person.persona90 or [],
@@ -479,26 +541,59 @@ class MemoryStore:
             updated_at=_iso(person.updated_at) or "",
         )
 
-    def _get_person(self, session: Session, person_id: int) -> Person:
+    def _get_or_create_owner(self, session: Session) -> User:
+        if self._owner_user_id is not None:
+            owner = session.get(User, self._owner_user_id)
+            if owner is None:
+                raise ValueError(f"Owner user id={self._owner_user_id} not found")
+            return owner
+
+        owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
+        if owner is None:
+            owner = User(
+                first_name="Memory",
+                last_name="Owner",
+                display_name="Memory Store Owner",
+                username="memory-store-owner",
+            )
+            session.add(owner)
+            session.flush()
+            logger.debug("Created default owner user id=%s", owner.id)
+
+        self._owner_user_id = owner.id
+        return owner
+
+    def _get_person(self, session: Session, person_id: UUID, person_user_id: UUID | None) -> Person:
         person = session.get(Person, person_id)
-        if person is None:
+        if person is None or (person_user_id is not None and person.user_id != person_user_id):
             raise ValueError(f"Person id={person_id} not found")
         return person
 
-    def _assert_person_exists(self, session: Session, person_id: int) -> None:
-        if session.get(Person, person_id) is None:
+    def _assert_person_exists(self, session: Session, person_id: UUID, owner_id: UUID) -> None:
+        person = session.get(Person, person_id)
+        if person is None or person.user_id != owner_id:
             raise ValueError(f"Person id={person_id} not found")
 
-    def _assert_episode_exists(self, session: Session, episode_id: Optional[int]) -> None:
-        if episode_id is not None and session.get(Episode, episode_id) is None:
+    def _assert_episode_exists(
+        self,
+        session: Session,
+        episode_id: Optional[UUID],
+        owner_id: UUID,
+    ) -> None:
+        if episode_id is None:
+            return
+        episode = session.get(Episode, episode_id)
+        if episode is None or episode.user_id != owner_id:
             raise ValueError(f"Episode id={episode_id} not found")
 
-    def _assert_people_exist(self, session: Session, person_ids: list[int]) -> None:
+    def _assert_people_exist(self, session: Session, person_ids: list[UUID], owner_id: UUID) -> None:
         if not person_ids:
             return
-        unique_ids = sorted(set(person_ids))
+        unique_ids = list(dict.fromkeys(person_ids))
         existing_ids = set(
-            session.scalars(select(Person.id).where(Person.id.in_(unique_ids))).all()
+            session.scalars(
+                select(Person.id).where(Person.user_id == owner_id, Person.id.in_(unique_ids))
+            ).all()
         )
         missing = [pid for pid in unique_ids if pid not in existing_ids]
         if missing:
