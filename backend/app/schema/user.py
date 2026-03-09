@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserFactRead(BaseModel):
+    """Serialized user fact."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -17,6 +19,8 @@ class UserFactRead(BaseModel):
 
 
 class UserRead(BaseModel):
+    """Serialized user record."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
