@@ -8,7 +8,7 @@ Issue Acceptance Criterion:
   Profile context retrieval works
   No raw SQL used outside MemoryStore
   All functions typed (enforced by Pydantic)
-Input validation catches bad data
+  Input validation catches bad data
 
 Run with:
     cd egomem-glasses
