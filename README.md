@@ -47,6 +47,14 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```
 
+### Backend with Docker
+```bash
+cd backend
+docker compose up --build
+```
+
+The API will be available on `http://localhost:8000` and PostgreSQL on `localhost:5432`.
+
 ### Services
 The `face_recog_local.py` service handles face recognition tasks.
 
