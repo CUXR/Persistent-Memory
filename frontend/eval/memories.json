@@ -1,0 +1,7 @@
+[
+  { "person": "John", "items": ["John likes tennis"] },
+  { "person": "Sarah", "items": ["Sarah works in design"] },
+  { "person": "Alex", "items": ["Alex likes hiking"] },
+  { "person": "Mia", "items": ["Mia has a cat"] },
+  { "person": "Daniel", "items": ["Daniel plays guitar"] }
+]
