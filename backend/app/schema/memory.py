@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -72,7 +73,7 @@ class EpisodeIn(BaseModel):
     time_end: datetime
     transcript: str = ""
     summary: str = ""
-    participant_ids: list[int] = Field(default_factory=list)
+    participant_ids: list[UUID] = Field(default_factory=list)
 
     @field_validator("time_end")
     @classmethod
@@ -85,10 +86,10 @@ class EpisodeIn(BaseModel):
 
 class FactIn(BaseModel):
     """Input for write_fact()."""
-    person_id: int
+    person_id: UUID
     fact_text: str = Field(..., min_length=1)
     confidence: float = 1.0
-    episode_id: Optional[int] = None
+    episode_id: Optional[UUID] = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
 
@@ -108,10 +109,10 @@ class FactIn(BaseModel):
 
 class PrefIn(BaseModel):
     """Input for write_pref()."""
-    person_id: int
+    person_id: UUID
     pref_text: str = Field(..., min_length=1)
     confidence: float = 1.0
-    episode_id: Optional[int] = None
+    episode_id: Optional[UUID] = None
 
     @field_validator("confidence")
     @classmethod
@@ -121,11 +122,11 @@ class PrefIn(BaseModel):
 
 class SummaryIn(BaseModel):
     """Input for write_summary()."""
-    person_id: int
+    person_id: UUID
     summary_text: str = Field(..., min_length=1)
     episode_time_start: Optional[datetime] = None
     episode_time_end: Optional[datetime] = None
-    episode_id: Optional[int] = None
+    episode_id: Optional[UUID] = None
 
     @field_validator("episode_time_end")
     @classmethod
@@ -138,11 +139,11 @@ class SummaryIn(BaseModel):
 #enforces non-empty relation and forbids self edges
 class EdgeIn(BaseModel):
     """Input for write_edge()."""
-    src_id: int
+    src_id: UUID
     relation: str = Field(..., min_length=1, max_length=100)
-    dst_id: int
+    dst_id: UUID
     confidence: float = 1.0
-    episode_id: Optional[int] = None
+    episode_id: Optional[UUID] = None
 
     @field_validator("confidence")
     @classmethod
@@ -151,7 +152,7 @@ class EdgeIn(BaseModel):
 
     @field_validator("dst_id")
     @classmethod
-    def no_self_edges(cls, v: int, info) -> int:
+    def no_self_edges(cls, v: UUID, info) -> UUID:
         if info.data.get("src_id") == v:
             raise ValueError("self-edges are not allowed (src_id == dst_id)")
         return v
@@ -160,7 +161,7 @@ class EdgeIn(BaseModel):
 #outputs schemas
 
 class PersonOut(BaseModel):
-    id: int
+    id: UUID
     name: str
     face_key: Optional[str]
     voice_key: Optional[str]
@@ -171,39 +172,39 @@ class PersonOut(BaseModel):
 
 
 class FactOut(BaseModel):
-    id: int
+    id: UUID
     fact_text: str
     confidence: float
-    episode_id: Optional[int]
+    episode_id: Optional[UUID]
     valid_from: Optional[str]
     valid_to: Optional[str]
     created_at: str
 
 
 class PrefOut(BaseModel):
-    id: int
+    id: UUID
     pref_text: str
     confidence: float
-    episode_id: Optional[int]
+    episode_id: Optional[UUID]
     created_at: str
 
 
 class SummaryOut(BaseModel):
-    id: int
+    id: UUID
     summary_text: str
     episode_time_start: Optional[str]
     episode_time_end: Optional[str]
-    episode_id: Optional[int]
+    episode_id: Optional[UUID]
     created_at: str
 
 
 class EdgeOut(BaseModel):
-    id: int
+    id: UUID
     relation: str
-    dst_id: int
+    dst_id: UUID
     dst_name: str
     confidence: float
-    episode_id: Optional[int]
+    episode_id: Optional[UUID]
     created_at: str
 
 
