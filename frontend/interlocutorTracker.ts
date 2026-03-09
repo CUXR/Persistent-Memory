@@ -20,7 +20,6 @@ export type Level1InterlocutorContext = unknown;
 export type GetProfileContextFn = (personId: string) => Promise<Level1InterlocutorContext>;
 
 /** Minimal wearer_state contract. */
-/** TODO: Need to implement the wearer state so the polling can actually grab this info */
 export type WearerState = { wearer_person_id: string };
 
 export type WearerStateLoader = () => Promise<WearerState> | WearerState;
@@ -70,7 +69,6 @@ export type InterlocutorTrackerOptions = {
   mockStream?: MockInterlocutorStream;
 
   // Dependency injection (recommended for tests)
-  // TODO: Need to implement the getProfileContext function so that the tracker can actually fetch the profile context for the interlocutor
   getProfileContext?: GetProfileContextFn;
   loadWearerState?: WearerStateLoader;
 };
@@ -84,6 +82,21 @@ function sleep(ms: number): Promise<void> {
  * This avoids hard-coding your repo layout, while still “just working” in many setups.
  */
 async function defaultLoadWearerState(): Promise<WearerState> {
+  // Prefer backend API as the source of truth.
+  try {
+    const backendBaseUrl =
+      (typeof process !== "undefined" ? process.env?.EGO_MEM_BACKEND_URL : undefined) ?? "http://localhost:8000";
+    const res = await fetch(`${backendBaseUrl.replace(/\/+$/, "")}/users/wearer-state`);
+    if (res.ok) {
+      const data = (await res.json()) as Partial<WearerState>;
+      if (typeof data?.wearer_person_id === "string" && data.wearer_person_id.length > 0) {
+        return { wearer_person_id: data.wearer_person_id };
+      }
+    }
+  } catch {
+    // ignore and fall back
+  }
+
   // Try common patterns:
   // 1) exported const wearer_state
   // 2) exported function getWearerState()
@@ -195,9 +208,10 @@ export class InterlocutorTracker extends EventEmitter {
 
     // Kick off loop without awaiting it (but ensure it can't throw unhandled).
     void this.pollLoop().catch((err) => {
-      // No console errors per acceptance criteria: re-emit so caller can handle/log as desired.
+      // No console errors per acceptance criteria: surface if listeners are present.
+      // This should be rare because per-tick errors are handled inside pollLoop.
       this.running = false;
-      this.emit("error", err);
+      this.safeEmitError(err instanceof Error ? err : new Error(String(err)));
     });
   }
 
@@ -295,8 +309,18 @@ export class InterlocutorTracker extends EventEmitter {
   /** Continuous polling loop: runs until stop() sets running=false. */
   private async pollLoop(): Promise<void> {
     while (this.running) {
-      await this.pollOnce();
+      try {
+        await this.pollOnce();
+      } catch (err) {
+        this.safeEmitError(err instanceof Error ? err : new Error(String(err)));
+      }
       await sleep(this.pollIntervalMs);
+    }
+  }
+
+  private safeEmitError(err: Error): void {
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", err);
     }
   }
 

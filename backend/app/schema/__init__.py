@@ -1,7 +1,7 @@
 """Pydantic schemas used by the backend."""
 
 from .memory import EdgeOut, FactOut, PersonOut, PrefOut, ProfileContext, SummaryOut
-from .user import UserFactRead, UserRead
+from .user import UserFactRead, UserRead, WearerStateRead
 
 __all__ = [
     "EdgeOut",
@@ -12,4 +12,5 @@ __all__ = [
     "SummaryOut",
     "UserFactRead",
     "UserRead",
+    "WearerStateRead",
 ]

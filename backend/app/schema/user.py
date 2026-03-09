@@ -32,3 +32,9 @@ class UserRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     facts: list[UserFactRead] = Field(default_factory=list)
+
+
+class WearerStateRead(BaseModel):
+    """Serialized wearer state consumed by the interlocutor tracker."""
+
+    wearer_person_id: UUID
