@@ -43,6 +43,7 @@ def _check_persona90(v: list[float]) -> list[float]:
 
 #input schemas
 
+#validates name length, cleans aliases, ensure case-insensitivity and persona length rule
 class PersonIn(BaseModel):
     """Input for upsert_person()."""
     name: str = Field(..., min_length=1, max_length=200)
@@ -134,7 +135,7 @@ class SummaryIn(BaseModel):
             raise ValueError("episode_time_end must be >= episode_time_start")
         return v
 
-
+#enforces non-empty relation and forbids self edges
 class EdgeIn(BaseModel):
     """Input for write_edge()."""
     src_id: int

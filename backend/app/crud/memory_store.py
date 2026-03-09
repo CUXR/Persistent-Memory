@@ -86,6 +86,7 @@ class MemoryStore:
             raise RuntimeError("MemoryStore not initialized - call .initialize() first")
         return self._Session
 
+#updates keys and persona90, replaces aliases as full set, returns a PersonOut
     def upsert_person(
         self,
         name: str,
@@ -164,6 +165,7 @@ class MemoryStore:
             logger.debug("resolve_person: '%s' -> id=%d", cleaned, person.id)
             return self._load_person(session, person.id)
 
+#validates times and participant IDs then inserts episode + participants, returns episode id
     def write_episode(
         self,
         time_start: datetime,
