@@ -68,7 +68,14 @@ class MemoryStore:
     """Typed, deterministic memory access layer over the project schema."""
 
     def __init__(self, db_url: str | None = None, owner_user_id: UUID | None = None) -> None:
-        """Create a store bound to an optional database URL and owner user."""
+        """Create a store bound to an optional database URL and owner user.
+
+        Args:
+            db_url: Override for the configured database URL.
+            owner_user_id: Existing user UUID that owns all memory records created
+                through this store. When omitted, the store will reuse the first
+                available user or create a default owner on first write.
+        """
 
         self._db_url = db_url or settings.database_url
         self._owner_user_id = owner_user_id
@@ -115,7 +122,16 @@ class MemoryStore:
         voice_key: Optional[str] = None,
         persona90: Optional[list[float]] = None,
     ) -> PersonOut:
-        """Create or update an interlocutor and replace their alias set."""
+        """Create or update an interlocutor for the current owner.
+
+        The lookup is case-insensitive on the person's display name within the
+        active owner scope. When a matching person already exists, the supplied
+        keys and persona vector are updated and the alias collection is replaced
+        with the provided set.
+
+        Returns:
+            The normalized stored person record.
+        """
 
         data = PersonIn(
             name=name,
@@ -175,7 +191,14 @@ class MemoryStore:
                 raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
 
     def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
-        """Resolve a person by display name or any case-insensitive alias."""
+        """Resolve a person by display name or alias for the current owner.
+
+        The match is case-insensitive and restricted to people owned by the
+        store's active user. Blank input returns ``None`` instead of raising.
+
+        Returns:
+            The matching person record, or ``None`` when no match exists.
+        """
 
         cleaned = text.strip()
         if not cleaned:
@@ -211,7 +234,15 @@ class MemoryStore:
         summary: str = "",
         participants: Optional[list[UUID]] = None,
     ) -> UUID:
-        """Insert an episode for the current owner and all listed participants."""
+        """Insert a conversation episode and its participant links.
+
+        The first participant becomes the primary ``Episode.person_id`` so the
+        episode remains compatible with the main schema, while every supplied
+        participant is also written to ``EpisodeParticipant``.
+
+        Returns:
+            The UUID of the created episode row.
+        """
 
         data = EpisodeIn(
             time_start=time_start,
@@ -263,7 +294,14 @@ class MemoryStore:
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
     ) -> UUID:
-        """Persist a fact about a person, optionally linked to an episode."""
+        """Persist a structured fact about a person.
+
+        The person must belong to the current owner. When ``episode_id`` is
+        provided, the fact is linked back to the episode where it was learned.
+
+        Returns:
+            The UUID of the created fact row.
+        """
 
         data = FactIn(
             person_id=person_id,
@@ -302,7 +340,14 @@ class MemoryStore:
         confidence: float = 1.0,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Persist a preference remembered about a person."""
+        """Persist a preference remembered about a person.
+
+        Preferences are owner-scoped through the referenced person and may be
+        associated with an originating episode.
+
+        Returns:
+            The UUID of the created preference row.
+        """
 
         data = PrefIn(
             person_id=person_id,
@@ -338,7 +383,14 @@ class MemoryStore:
         episode_time_end: Optional[datetime] = None,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Persist a time-bounded summary for a person."""
+        """Persist a summary slice for a person.
+
+        This stores the human-readable summary text plus optional time bounds
+        describing the source interaction window and an optional backing episode.
+
+        Returns:
+            The UUID of the created summary row.
+        """
 
         data = SummaryIn(
             person_id=person_id,
@@ -376,7 +428,15 @@ class MemoryStore:
         confidence: float = 1.0,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Create or update a directed relationship between two people."""
+        """Create or update a directed relationship between two people.
+
+        Edges are unique by ``(src_id, relation, dst_id)``. Rewriting an
+        existing edge updates its confidence and optional episode reference
+        instead of creating a duplicate row.
+
+        Returns:
+            The UUID of the inserted or updated edge row.
+        """
 
         data = EdgeIn(
             src_id=src_id,
@@ -428,7 +488,15 @@ class MemoryStore:
             return edge_id
 
     def get_profile_context(self, person_id: UUID) -> ProfileContext:
-        """Return the deterministic profile context bundle for one person."""
+        """Return the issue-specified profile context bundle for one person.
+
+        The returned structure contains facts, preferences, summaries, outgoing
+        edges, and the stored ``persona90`` vector ordered newest-first within
+        each collection.
+
+        Returns:
+            A ``ProfileContext`` ready for deterministic retrieval use.
+        """
 
         with self.Session() as session:
             owner = self._get_or_create_owner(session)
