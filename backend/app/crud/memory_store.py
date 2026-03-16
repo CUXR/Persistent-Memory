@@ -16,7 +16,7 @@ from ..core.database import Base
 from ..models.episode import Episode
 from ..models.memory import Alias, Edge, EpisodeParticipant, Pref, Summary
 from ..models.person import Person, PersonFact
-from ..models.user import User
+from ..models.user import User, UserFact
 from ..schema.memory import (
     EdgeIn,
     EdgeOut,
@@ -33,7 +33,6 @@ from ..schema.memory import (
 )
 
 logger = logging.getLogger("app.crud.memory_store")
-settings = get_settings()
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -77,8 +76,13 @@ class MemoryStore:
                 available user or create a default owner on first write.
         """
 
-        self._db_url = db_url or settings.database_url
+        self._db_url = db_url or get_settings().database_url
         self._owner_user_id = owner_user_id
+        # Track whether the owner UUID was explicitly supplied by the caller.
+        # When True, a missing owner is always a programming error and raises.
+        # When False, a stale cache (e.g. from a rolled-back read-only session)
+        # should silently recover by re-discovering or re-creating the owner.
+        self._explicit_owner: bool = owner_user_id is not None
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
         logger.info("MemoryStore created (db_url=%s)", self._db_url)
@@ -290,6 +294,7 @@ class MemoryStore:
         person_id: UUID,
         fact_text: str,
         confidence: float = 1.0,
+        fact_category: Optional[str] = None,
         episode_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
@@ -307,6 +312,7 @@ class MemoryStore:
             person_id=person_id,
             fact_text=fact_text,
             confidence=confidence,
+            fact_category=fact_category,
             episode_id=episode_id,
             valid_from=valid_from,
             valid_to=valid_to,
@@ -321,6 +327,7 @@ class MemoryStore:
                 row = PersonFact(
                     person_id=data.person_id,
                     fact_text=data.fact_text,
+                    fact_category=data.fact_category,
                     confidence=_decimal(data.confidence),
                     source_episode_id=data.episode_id,
                     valid_from=data.valid_from,
@@ -487,6 +494,22 @@ class MemoryStore:
             )
             return edge_id
 
+    def get_user_facts(self) -> list[str]:
+        """Return all fact texts stored for the current owner user.
+
+        Used by the ingestion pipeline to provide wearer context when detecting
+        shared interests between the wearer and an interlocutor.
+        """
+
+        with self.Session() as session:
+            owner = self._get_or_create_owner(session)
+            rows = session.scalars(
+                select(UserFact.fact_text)
+                .where(UserFact.user_id == owner.id)
+                .order_by(UserFact.created_at.asc())
+            ).all()
+            return list(rows)
+
     def get_profile_context(self, person_id: UUID) -> ProfileContext:
         """Return the issue-specified profile context bundle for one person.
 
@@ -531,6 +554,7 @@ class MemoryStore:
                     id=row.id,
                     fact_text=row.fact_text,
                     confidence=_float(row.confidence),
+                    fact_category=row.fact_category,
                     episode_id=row.source_episode_id,
                     valid_from=_iso(row.valid_from),
                     valid_to=_iso(row.valid_to),
@@ -612,9 +636,18 @@ class MemoryStore:
     def _get_or_create_owner(self, session: Session) -> User:
         if self._owner_user_id is not None:
             owner = session.get(User, self._owner_user_id)
-            if owner is None:
+            if owner is not None:
+                return owner
+            if self._explicit_owner:
+                # Caller supplied a specific UUID — a missing row is always an error.
                 raise ValueError(f"Owner user id={self._owner_user_id} not found")
-            return owner
+            # Auto-cached UUID is stale (e.g. from a rolled-back read-only session).
+            # Clear the cache and fall through to re-discover / re-create below.
+            logger.debug(
+                "_get_or_create_owner: stale cached id=%s, re-discovering owner",
+                self._owner_user_id,
+            )
+            self._owner_user_id = None
 
         owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
         if owner is None:
