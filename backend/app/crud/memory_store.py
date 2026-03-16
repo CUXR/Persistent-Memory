@@ -205,7 +205,10 @@ class MemoryStore:
             return None
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
+            owner = self._get_owner(session)
+            if owner is None:
+                logger.debug("resolve_person: no owner available for '%s'", cleaned)
+                return None
             person = session.scalar(
                 select(Person)
                 .outerjoin(Alias, Alias.person_id == Person.id)
@@ -224,6 +227,41 @@ class MemoryStore:
                 return None
 
             logger.debug("resolve_person: '%s' -> id=%s", cleaned, person.id)
+            return self._load_person(session, person.id)
+
+    def resolve_person_by_face_key(self, face_key: Optional[str]) -> Optional[PersonOut]:
+        """Resolve a person by stored face key for the current owner.
+
+        The match is exact after trimming outer whitespace and restricted to
+        people owned by the store's active user. Blank input returns ``None``.
+
+        Returns:
+            The matching person record, or ``None`` when no match exists.
+        """
+
+        cleaned = (face_key or "").strip()
+        if not cleaned:
+            return None
+
+        with self.Session() as session:
+            owner = self._get_owner(session)
+            if owner is None:
+                logger.debug("resolve_person_by_face_key: no owner available for '%s'", cleaned)
+                return None
+            person = session.scalar(
+                select(Person)
+                .where(
+                    Person.user_id == owner.id,
+                    Person.face_key == cleaned,
+                )
+                .limit(1)
+            )
+
+            if person is None:
+                logger.debug("resolve_person_by_face_key: no match for '%s'", cleaned)
+                return None
+
+            logger.debug("resolve_person_by_face_key: '%s' -> id=%s", cleaned, person.id)
             return self._load_person(session, person.id)
 
     def write_episode(
@@ -499,7 +537,9 @@ class MemoryStore:
         """
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
+            owner = self._get_owner(session)
+            if owner is None:
+                raise ValueError(f"Person id={person_id} not found")
             person = self._get_person(session, person_id, owner.id)
 
             facts_rows = session.scalars(
@@ -609,25 +649,32 @@ class MemoryStore:
             updated_at=_iso(person.updated_at) or "",
         )
 
-    def _get_or_create_owner(self, session: Session) -> User:
+    def _get_owner(self, session: Session) -> User | None:
         if self._owner_user_id is not None:
             owner = session.get(User, self._owner_user_id)
-            if owner is None:
-                raise ValueError(f"Owner user id={self._owner_user_id} not found")
-            return owner
+            if owner is not None:
+                return owner
+            self._owner_user_id = None
 
         owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
-        if owner is None:
-            owner = User(
-                first_name="Memory",
-                last_name="Owner",
-                display_name="Memory Store Owner",
-                username="memory-store-owner",
-            )
-            session.add(owner)
-            session.flush()
-            logger.debug("Created default owner user id=%s", owner.id)
+        if owner is not None:
+            self._owner_user_id = owner.id
+        return owner
 
+    def _get_or_create_owner(self, session: Session) -> User:
+        owner = self._get_owner(session)
+        if owner is not None:
+            return owner
+
+        owner = User(
+            first_name="Memory",
+            last_name="Owner",
+            display_name="Memory Store Owner",
+            username="memory-store-owner",
+        )
+        session.add(owner)
+        session.flush()
+        logger.debug("Created default owner user id=%s", owner.id)
         self._owner_user_id = owner.id
         return owner
 

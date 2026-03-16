@@ -122,6 +122,28 @@ class TestResolvePerson:
     def test_resolve_empty_string_returns_none(self, store, emily):
         assert store.resolve_person_by_name_or_alias("  ") is None
 
+    def test_resolve_by_face_key(self, store, emily):
+        found = store.resolve_person_by_face_key("face_emily_001")
+        assert found is not None
+        assert found.id == emily.id
+
+    def test_resolve_unknown_face_key_returns_none(self, store, emily):
+        assert store.resolve_person_by_face_key("face_unknown") is None
+
+    def test_resolve_blank_face_key_returns_none(self, store, emily):
+        assert store.resolve_person_by_face_key("  ") is None
+
+    def test_resolve_on_empty_store_does_not_break_later_writes(self, store):
+        assert store.resolve_person_by_face_key("face_missing") is None
+
+        created = store.upsert_person(
+            name="Later Person",
+            aliases=[],
+            face_key="face_later_001",
+        )
+
+        assert created.face_key == "face_later_001"
+
 
 class TestWriteEpisode:
     def test_write_episode_with_participants(self, store, emily, john):
