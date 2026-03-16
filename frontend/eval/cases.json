@@ -1,0 +1,27 @@
+[
+  {
+    "query": "Tell me about John",
+    "expected_person": "John",
+    "expected_items": ["John likes tennis"]
+  },
+  {
+    "query": "What do you remember about Sarah?",
+    "expected_person": "Sarah",
+    "expected_items": ["Sarah works in design"]
+  },
+  {
+    "query": "What does Alex enjoy?",
+    "expected_person": "Alex",
+    "expected_items": ["Alex likes hiking"]
+  },
+  {
+    "query": "Tell me about Mia",
+    "expected_person": "Mia",
+    "expected_items": ["Mia has a cat"]
+  },
+  {
+    "query": "What do you know about Daniel?",
+    "expected_person": "Daniel",
+    "expected_items": ["Daniel plays guitar"]
+  }
+]
