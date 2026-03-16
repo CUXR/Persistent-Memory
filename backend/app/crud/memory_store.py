@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import create_engine, delete, func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased, sessionmaker
+from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
 from ..core.config import get_settings
 from ..core.database import Base
@@ -193,6 +193,33 @@ class MemoryStore:
                 return self._load_person(session, person.id)
             except IntegrityError as exc:
                 raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
+
+    def list_people(self) -> list[Person]:
+        """Return all people for the current owner with aliases eagerly loaded.
+
+        This is a read-only method intended for resolution and search use cases
+        where the caller needs access to ``display_name``, ``first_name``, and
+        ``aliases`` on each person.  Unlike write methods, this will never
+        create a default owner; it returns an empty list when no owner exists.
+
+        Returns:
+            Person ORM instances with their ``aliases`` relationship populated.
+            An empty list when no owner or people exist.
+        """
+
+        with self.Session() as session:
+            owner_id = self._find_owner_id(session)
+            if owner_id is None:
+                return []
+            people = list(
+                session.scalars(
+                    select(Person)
+                    .options(selectinload(Person.aliases))
+                    .where(Person.user_id == owner_id)
+                ).all()
+            )
+            logger.debug("list_people: %d people for owner=%s", len(people), owner_id)
+            return people
 
     def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
         """Resolve a person by display name or alias for the current owner.
@@ -632,6 +659,29 @@ class MemoryStore:
             created_at=_iso(person.created_at) or "",
             updated_at=_iso(person.updated_at) or "",
         )
+
+    def _find_owner_id(self, session: Session) -> UUID | None:
+        """Return the active owner's UUID without creating a default user.
+
+        This is the read-safe counterpart to ``_get_or_create_owner``.  When
+        the cached ``_owner_user_id`` points to a deleted or rolled-back user,
+        the stale reference is cleared and the lookup falls through to the
+        first available user.  Returns ``None`` when no user exists at all.
+        """
+
+        if self._owner_user_id is not None:
+            if session.get(User, self._owner_user_id) is not None:
+                return self._owner_user_id
+            # Stale reference -- clear and fall through
+            self._owner_user_id = None
+
+        owner = session.scalar(
+            select(User).order_by(User.created_at.asc()).limit(1)
+        )
+        if owner is not None:
+            self._owner_user_id = owner.id
+            return owner.id
+        return None
 
     def _get_or_create_owner(self, session: Session) -> User:
         if self._owner_user_id is not None:

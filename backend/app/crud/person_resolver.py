@@ -3,12 +3,7 @@ from __future__ import annotations
 import re
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-
 from .memory_store import MemoryStore
-from ..models.person import Person
-from ..models.user import User
 from ..schema.person_resolver import ResolveCandidate, ResolveResult
 
 ACTIVE_INTERLOCUTOR_PHRASES = {
@@ -25,6 +20,7 @@ PRONOUN_PATTERNS = {
     "her",
 }
 
+# Confidence tiers for resolution results
 ACTIVE_INTERLOCUTOR_CONFIDENCE = 0.95
 EXACT_MATCH_CONFIDENCE = 0.95
 SENTENCE_NAME_CONFIDENCE = 0.8
@@ -117,36 +113,12 @@ class PersonResolver:
     def set_active_interlocutor(self, person_id: UUID | None) -> None:
         self._active_interlocutor_id = person_id
 
-    def _list_people(self) -> list[Person]:
-        """Return people for the current owner without creating a new owner on reads."""
-
-        with self.store.Session() as session:
-            owner_id = self.store._owner_user_id
-            if owner_id is not None:
-                owner = session.get(User, owner_id)
-                if owner is None:
-                    self.store._owner_user_id = None
-                    return []
-            else:
-                owner_id = session.scalar(select(User.id).order_by(User.created_at.asc()).limit(1))
-                if owner_id is None:
-                    return []
-                self.store._owner_user_id = owner_id
-
-            return list(
-                session.scalars(
-                    select(Person)
-                    .options(selectinload(Person.aliases))
-                    .where(Person.user_id == owner_id)
-                ).all()
-            )
-
     def _match_name_or_alias_in_sentence(self, query_text: str) -> ResolveResult | None:
         """Resolve a full display name or alias mentioned inside longer text."""
 
         matches: dict[UUID, tuple[str, float]] = {}
 
-        for person in self._list_people():
+        for person in self.store.list_people():
             display_name = person.display_name or person.first_name
             if display_name and _contains_phrase(query_text, display_name):
                 matches[person.id] = (display_name, SENTENCE_NAME_CONFIDENCE)
@@ -183,7 +155,7 @@ class PersonResolver:
 
         matches: list[tuple[UUID, str]] = []
 
-        for person in self._list_people():
+        for person in self.store.list_people():
             first_name = _normalize(person.first_name)
             if first_name and first_name in tokens:
                 matches.append((person.id, person.display_name or person.first_name))
@@ -203,15 +175,20 @@ class PersonResolver:
         return _ambiguous(candidates, confidence=AMBIGUOUS_CONFIDENCE)
 
     def resolve_person_from_query(self, query_text: str) -> ResolveResult:
-        """
-        Determine which person a user query is referencing.
-        Resolution happens in the following order:
-        1. Active interlocutor phrases included in ACTIVE_INTERLOCUTOR_PHRASES and PRONOUN_PATTERNS
-        2. Exact display-name and alias matches (case-insensitive)
-        3. Embedded full-name and alias mentions inside longer text
-        4. First-name matches (ambiguous if multiple people have the same name)
+        """Determine which person a user query is referencing.
 
-        This function resolves identity and does not retrieve profile data.
+        Resolution happens in the following priority order:
+
+        1. Exact display-name and alias matches (case-insensitive)
+        2. Embedded full-name and alias mentions inside longer text
+        3. First-name token matches (ambiguous if multiple people share a name)
+        4. Active interlocutor phrases / pronoun references
+
+        Name-based matching is attempted before pronoun or relative-reference
+        resolution so that queries like ``"What did Emily tell him?"`` resolve
+        to Emily rather than the active interlocutor.
+
+        This function resolves identity only and does not retrieve profile data.
 
         Args:
             query_text: Natural-language query that may contain a person
@@ -222,30 +199,35 @@ class PersonResolver:
             match is found, or is_ambiguous=True with candidates when
             multiple people match.
         """
+
         cleaned = _normalize(query_text)
         if not cleaned:
             return _no_match()
 
+        # 1. Exact display-name / alias
+        exact = self.store.resolve_person_by_name_or_alias(cleaned)
+        if exact is not None:
+            return _resolved(exact.id, confidence=EXACT_MATCH_CONFIDENCE)
+
+        # 2. Name or alias embedded in a longer sentence
+        sentence_match = self._match_name_or_alias_in_sentence(cleaned)
+        if sentence_match is not None:
+            return sentence_match
+
+        # 3. First-name token match
+        first_name_match = self._match_first_name(cleaned)
+        if first_name_match is not None:
+            return first_name_match
+
+        # 4. Relative / pronoun reference to the active interlocutor
         if _is_active_interlocutor_reference(cleaned):
             if self._active_interlocutor_id is not None:
                 return _resolved(
                     self._active_interlocutor_id,
                     confidence=ACTIVE_INTERLOCUTOR_CONFIDENCE,
                 )
-            return _no_match()
-
-        exact = self.store.resolve_person_by_name_or_alias(cleaned)
-        if exact is not None:
-            return _resolved(exact.id, confidence=EXACT_MATCH_CONFIDENCE)
-
-        sentence_match = self._match_name_or_alias_in_sentence(cleaned)
-        if sentence_match is not None:
-            return sentence_match
-
-        first_name_match = self._match_first_name(cleaned)
-        if first_name_match is not None:
-            return first_name_match
 
         return _no_match()
 
-        
+
+__all__ = ["PersonResolver"]
