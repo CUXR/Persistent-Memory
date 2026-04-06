@@ -20,10 +20,13 @@ Design notes:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
+
+# Allowed categories for PersonFact.fact_category (mirrors DB CHECK constraint)
+PersonFactCategory = Literal["visual_descriptor", "affiliation", "hobby"]
 
 
 # ── Shared validators ────────────────────────────────────────
@@ -89,6 +92,7 @@ class FactIn(BaseModel):
     person_id: UUID
     fact_text: str = Field(..., min_length=1)
     confidence: float = 1.0
+    fact_category: Optional[PersonFactCategory] = None
     episode_id: Optional[UUID] = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
@@ -175,6 +179,7 @@ class FactOut(BaseModel):
     id: UUID
     fact_text: str
     confidence: float
+    fact_category: Optional[str] = None
     episode_id: Optional[UUID]
     valid_from: Optional[str]
     valid_to: Optional[str]
