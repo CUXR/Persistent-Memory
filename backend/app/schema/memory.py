@@ -47,11 +47,10 @@ def _check_persona90(v: list[float]) -> list[float]:
 
 #input schemas
 
-#validates name length, cleans aliases, ensure case-insensitivity and persona length rule
+#validates name length and persona length rule
 class PersonIn(BaseModel):
     """Input for upsert_person()."""
     name: str = Field(..., min_length=1, max_length=200)
-    aliases: list[str] = Field(default_factory=list)
     face_key: Optional[str] = None
     voice_key: Optional[str] = None
     persona90: list[float] = Field(default_factory=list)
@@ -60,14 +59,6 @@ class PersonIn(BaseModel):
     @classmethod
     def validate_persona90(cls, v: list[float]) -> list[float]:
         return _check_persona90(v)
-
-    @field_validator("aliases")
-    @classmethod
-    def validate_aliases(cls, v: list[str]) -> list[str]:
-        cleaned = [a.strip() for a in v if a.strip()]
-        if len(cleaned) != len(set(a.lower() for a in cleaned)):
-            raise ValueError("aliases must be unique (case-insensitive)")
-        return cleaned
 
 
 class EpisodeIn(BaseModel):
@@ -109,19 +100,6 @@ class FactIn(BaseModel):
         if start and v and v < start:
             raise ValueError("valid_to must be >= valid_from")
         return v
-
-
-class PrefIn(BaseModel):
-    """Input for write_pref()."""
-    person_id: UUID
-    pref_text: str = Field(..., min_length=1)
-    confidence: float = 1.0
-    episode_id: Optional[UUID] = None
-
-    @field_validator("confidence")
-    @classmethod
-    def validate_confidence(cls, v: float) -> float:
-        return _check_confidence(v)
 
 
 class SummaryIn(BaseModel):
@@ -170,7 +148,6 @@ class PersonOut(BaseModel):
     face_key: Optional[str]
     voice_key: Optional[str]
     persona90: list[float]
-    aliases: list[str]
     created_at: str
     updated_at: str
 
@@ -183,14 +160,6 @@ class FactOut(BaseModel):
     episode_id: Optional[UUID]
     valid_from: Optional[str]
     valid_to: Optional[str]
-    created_at: str
-
-
-class PrefOut(BaseModel):
-    id: UUID
-    pref_text: str
-    confidence: float
-    episode_id: Optional[UUID]
     created_at: str
 
 
@@ -223,10 +192,9 @@ class ProfileContext(BaseModel):
     serialized into the text channel of the MemChunk (Eq. 2: p_t).
 
     Shape matches the issue spec:
-        { facts, prefs, summaries, edges_from, persona90 }
+        { facts, summaries, edges_from, persona90 }
     """
     facts: list[FactOut] = Field(default_factory=list)
-    prefs: list[PrefOut] = Field(default_factory=list)
     summaries: list[SummaryOut] = Field(default_factory=list)
     edges_from: list[EdgeOut] = Field(default_factory=list)
     persona90: list[float] = Field(default_factory=list)

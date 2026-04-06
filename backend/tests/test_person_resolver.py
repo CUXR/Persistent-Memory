@@ -1,16 +1,12 @@
 """
 Tests for the person_resolver module.
 
-Issue #2 Acceptance Criteria:
-  - Query referencing current interlocutor resolves correctly
+Issue #8 Acceptance Criteria:
   - Query referencing known name resolves correctly
-  - Alias resolution works
-  - Ambiguous queries result in requests for further information
+  - Ambiguous queries return candidates with fact hints
   - No console errors
-  - Module only resolves identity (no retrieval)
 """
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from uuid import UUID, uuid4
@@ -22,8 +18,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.crud.memory_store import MemoryStore
-
-# The module under test -- will fail until person_resolver.py is created.
+from app.models.user import User
 from app.crud.person_resolver import PersonResolver
 
 
@@ -33,8 +28,18 @@ from app.crud.person_resolver import PersonResolver
 @pytest.fixture
 def store():
     """Fresh in-memory database for each test."""
-    s = MemoryStore("sqlite+pysqlite:///:memory:")
+    owner_id = uuid4()
+    s = MemoryStore("sqlite+pysqlite:///:memory:", owner_user_id=owner_id)
     s.initialize()
+    with s.Session() as session:
+        with session.begin():
+            session.add(User(
+                id=owner_id,
+                first_name="Test",
+                last_name="Owner",
+                display_name="Test Owner",
+                username="test-owner",
+            ))
     yield s
     s.close()
 
@@ -47,10 +52,9 @@ def resolver(store: MemoryStore):
 
 @pytest.fixture
 def emily(store: MemoryStore):
-    """Person: Emily Chen with aliases Em, Dr. Chen."""
+    """Person: Emily Chen."""
     return store.upsert_person(
         name="Emily Chen",
-        aliases=["Em", "Dr. Chen"],
         face_key="face_emily_001",
         voice_key="voice_emily_001",
         persona90=[0.5] * 90,
@@ -59,10 +63,9 @@ def emily(store: MemoryStore):
 
 @pytest.fixture
 def john(store: MemoryStore):
-    """Person: John Rivera with alias Johnny."""
+    """Person: John Rivera."""
     return store.upsert_person(
         name="John Rivera",
-        aliases=["Johnny"],
         face_key="face_john_001",
         voice_key="voice_john_001",
     )
@@ -70,27 +73,13 @@ def john(store: MemoryStore):
 
 @pytest.fixture
 def sarah(store: MemoryStore):
-    """Person: Sarah Martinez with alias S."""
+    """Person: Sarah Martinez."""
     return store.upsert_person(
         name="Sarah Martinez",
-        aliases=["S"],
     )
 
 
-@pytest.fixture
-def recent_episode(store, emily, john):
-    """Episode where Emily and John participated recently."""
-    now = datetime.now(timezone.utc)
-    return store.write_episode(
-        time_start=now - timedelta(minutes=10),
-        time_end=now,
-        transcript="Emily: Hi John!\nJohn: Hey Emily!",
-        summary="Casual greeting between Emily and John.",
-        participants=[emily.id, john.id],
-    )
-
-
-# ── Canonical name resolution ───────────────────────────────
+# ── Name resolution ─────────────────────────────────────────
 
 
 class TestResolveByName:
@@ -109,7 +98,6 @@ class TestResolveByName:
         assert result.person_id == emily.id
 
     def test_name_embedded_in_sentence(self, resolver, emily):
-        """Extract name from a natural-language query."""
         result = resolver.resolve_person_from_query("What does Emily Chen like?")
         assert result.person_id == emily.id
 
@@ -124,85 +112,23 @@ class TestResolveByName:
         assert result.is_ambiguous is False
 
 
-# ── Alias resolution ────────────────────────────────────────
-
-
-class TestResolveByAlias:
-    """Alias resolution works."""
-
-    def test_alias_exact(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Em")
-        assert result.person_id == emily.id
-
-    def test_alias_case_insensitive(self, resolver, emily):
-        result = resolver.resolve_person_from_query("dr. chen")
-        assert result.person_id == emily.id
-
-    def test_alias_in_sentence(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Tell me about Dr. Chen")
-        assert result.person_id == emily.id
-
-    def test_alias_for_second_person(self, resolver, john):
-        result = resolver.resolve_person_from_query("Johnny")
-        assert result.person_id == john.id
-
-
-# ── Active interlocutor resolution ──────────────────────────
-
-
-class TestResolveActiveInterlocutor:
-    """Query referencing current interlocutor resolves correctly."""
-
-    def test_the_person_i_was_talking_to(self, resolver, emily, recent_episode):
-        resolver.set_active_interlocutor(emily.id)
-        result = resolver.resolve_person_from_query(
-            "the person I was talking to"
-        )
-        assert result.person_id == emily.id
-
-    def test_this_person(self, resolver, emily, recent_episode):
-        resolver.set_active_interlocutor(emily.id)
-        result = resolver.resolve_person_from_query("this person")
-        assert result.person_id == emily.id
-
-    def test_them(self, resolver, emily, recent_episode):
-        resolver.set_active_interlocutor(emily.id)
-        result = resolver.resolve_person_from_query("What do they like?")
-        assert result.person_id == emily.id
-
-    def test_current_speaker(self, resolver, john, recent_episode):
-        resolver.set_active_interlocutor(john.id)
-        result = resolver.resolve_person_from_query(
-            "the person I'm speaking with"
-        )
-        assert result.person_id == john.id
-
-    def test_no_active_interlocutor_set(self, resolver):
-        """Relative reference without an active interlocutor returns no match."""
-        result = resolver.resolve_person_from_query(
-            "the person I was talking to"
-        )
-        assert result.person_id is None
-
-
 # ── Ambiguous queries ───────────────────────────────────────
 
 
 class TestAmbiguousQueries:
-    """Ambiguous queries result in requests for further information."""
+    """Ambiguous queries return candidates for disambiguation."""
 
     def test_shared_first_name_is_ambiguous(self, store, resolver):
-        """Two people named 'Alex' should produce an ambiguous result."""
-        store.upsert_person(name="Alex Smith", aliases=[])
-        store.upsert_person(name="Alex Johnson", aliases=[])
+        store.upsert_person(name="Alex Smith")
+        store.upsert_person(name="Alex Johnson")
         result = resolver.resolve_person_from_query("Alex")
         assert result.is_ambiguous is True
         assert result.person_id is None
         assert len(result.candidates) >= 2
 
     def test_ambiguous_result_contains_candidate_ids(self, store, resolver):
-        p1 = store.upsert_person(name="Jordan Lee", aliases=["JL"])
-        p2 = store.upsert_person(name="Jordan Park", aliases=["JP"])
+        p1 = store.upsert_person(name="Jordan Lee")
+        p2 = store.upsert_person(name="Jordan Park")
         result = resolver.resolve_person_from_query("Jordan")
         assert result.is_ambiguous is True
         candidate_ids = {c.person_id for c in result.candidates}
@@ -210,45 +136,65 @@ class TestAmbiguousQueries:
         assert p2.id in candidate_ids
 
     def test_full_name_disambiguates(self, store, resolver):
-        """Using the full name should not be ambiguous."""
-        store.upsert_person(name="Jordan Lee", aliases=[])
-        store.upsert_person(name="Jordan Park", aliases=[])
+        store.upsert_person(name="Jordan Lee")
+        store.upsert_person(name="Jordan Park")
         result = resolver.resolve_person_from_query("Jordan Lee")
         assert result.is_ambiguous is False
         assert result.person_id is not None
 
     def test_completely_vague_query(self, resolver, emily, john):
-        """A query with no person reference at all."""
         result = resolver.resolve_person_from_query("What's the weather?")
         assert result.person_id is None
         assert result.is_ambiguous is False
 
 
-# ── Confidence threshold ────────────────────────────────────
+# ── Disambiguation hints ────────────────────────────────────
 
 
-class TestConfidenceThreshold:
-    """Return resolved person_id only if above certain confidence threshold."""
+class TestAmbiguousWithHints:
+    """Ambiguous results include categorized fact hints."""
 
-    def test_exact_match_above_threshold(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Emily Chen")
-        assert result.confidence >= 0.8
+    def test_hints_populated_from_facts(self, store, resolver):
+        p1 = store.upsert_person(name="Alex Smith")
+        p2 = store.upsert_person(name="Alex Johnson")
+        store.write_fact(p1.id, "tall with brown hair", fact_category="visual_descriptor")
+        store.write_fact(p1.id, "works at Google", fact_category="affiliation")
+        store.write_fact(p2.id, "short with glasses", fact_category="visual_descriptor")
+        store.write_fact(p2.id, "likes tennis", fact_category="hobby")
 
-    def test_alias_match_above_threshold(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Em")
-        assert result.confidence >= 0.5
+        result = resolver.resolve_person_from_query("Alex")
+        assert result.is_ambiguous is True
 
-    def test_no_match_confidence_is_zero(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Nonexistent Person")
-        assert result.confidence == 0.0
+        by_name = {c.name: c for c in result.candidates}
+        smith = by_name["Alex Smith"]
+        johnson = by_name["Alex Johnson"]
 
-    def test_vague_reference_low_confidence(self, resolver, emily, john):
-        """A vague query should not produce high confidence."""
-        result = resolver.resolve_person_from_query("someone")
-        assert result.confidence < 0.5
+        assert "tall with brown hair" in smith.hints.get("visual_descriptor", [])
+        assert "works at Google" in smith.hints.get("affiliation", [])
+        assert "short with glasses" in johnson.hints.get("visual_descriptor", [])
+        assert "likes tennis" in johnson.hints.get("hobby", [])
+
+    def test_hints_empty_when_no_facts(self, store, resolver):
+        store.upsert_person(name="Alex Smith")
+        store.upsert_person(name="Alex Johnson")
+        result = resolver.resolve_person_from_query("Alex")
+        assert result.is_ambiguous is True
+        for candidate in result.candidates:
+            assert candidate.hints == {}
+
+    def test_hints_only_include_categorized_facts(self, store, resolver):
+        p1 = store.upsert_person(name="Alex Smith")
+        store.upsert_person(name="Alex Johnson")
+        store.write_fact(p1.id, "uncategorized fact")
+        store.write_fact(p1.id, "plays guitar", fact_category="hobby")
+
+        result = resolver.resolve_person_from_query("Alex")
+        smith = next(c for c in result.candidates if c.name == "Alex Smith")
+        assert "plays guitar" in smith.hints.get("hobby", [])
+        assert not any("uncategorized" in t for texts in smith.hints.values() for t in texts)
 
 
-# ── Edge cases and input validation ─────────────────────────
+# ── Edge cases ──────────────────────────────────────────────
 
 
 class TestEdgeCases:
@@ -278,16 +224,9 @@ class TestEdgeCases:
 
 
 class TestResultShape:
-    """Verify the resolver returns a well-typed result object."""
-
     def test_resolved_result_has_person_id(self, resolver, emily):
         result = resolver.resolve_person_from_query("Emily Chen")
         assert isinstance(result.person_id, UUID)
-
-    def test_result_has_confidence(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Emily Chen")
-        assert isinstance(result.confidence, float)
-        assert 0.0 <= result.confidence <= 1.0
 
     def test_result_has_is_ambiguous(self, resolver, emily):
         result = resolver.resolve_person_from_query("Emily Chen")
@@ -300,27 +239,8 @@ class TestResultShape:
     def test_unresolved_result_shape(self, resolver):
         result = resolver.resolve_person_from_query("Nobody")
         assert result.person_id is None
-        assert result.confidence == 0.0
         assert result.is_ambiguous is False
         assert result.candidates == []
-
-
-# ── Identity-only boundary ──────────────────────────────────
-
-
-class TestIdentityOnlyBoundary:
-    """Module only resolves identity; no retrieval should occur."""
-
-    def test_resolve_does_not_return_facts(self, resolver, store, emily):
-        store.write_fact(person_id=emily.id, fact_text="Likes cats")
-        result = resolver.resolve_person_from_query("Emily Chen")
-        assert not hasattr(result, "facts")
-
-    def test_resolve_does_not_return_profile(self, resolver, emily):
-        result = resolver.resolve_person_from_query("Emily Chen")
-        assert not hasattr(result, "profile")
-        assert not hasattr(result, "prefs")
-        assert not hasattr(result, "summaries")
 
 
 # ── Multiple-person scenarios ───────────────────────────────
@@ -333,18 +253,3 @@ class TestMultiplePeople:
         assert r1.person_id == emily.id
         assert r2.person_id == john.id
         assert r1.person_id != r2.person_id
-
-    def test_resolve_by_alias_when_multiple_people_exist(
-        self, resolver, emily, john, sarah
-    ):
-        result = resolver.resolve_person_from_query("Johnny")
-        assert result.person_id == john.id
-
-    def test_switching_active_interlocutor(self, resolver, emily, john, recent_episode):
-        resolver.set_active_interlocutor(emily.id)
-        r1 = resolver.resolve_person_from_query("this person")
-        assert r1.person_id == emily.id
-
-        resolver.set_active_interlocutor(john.id)
-        r2 = resolver.resolve_person_from_query("this person")
-        assert r2.person_id == john.id

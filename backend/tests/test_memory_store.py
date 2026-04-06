@@ -21,28 +21,44 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.crud.memory_store import MemoryStore
-from app.models.memory import Edge, Pref, Summary
+from app.models.memory import Edge, Summary
 from app.models.person import PersonFact
 from app.models.user import User
+
+
+def _make_store() -> MemoryStore:
+    """Create an initialized MemoryStore with a pre-seeded owner user."""
+
+    owner_id = uuid4()
+    store = MemoryStore("sqlite+pysqlite:///:memory:", owner_user_id=owner_id)
+    store.initialize()
+    with store.Session() as session:
+        with session.begin():
+            session.add(User(
+                id=owner_id,
+                first_name="Test",
+                last_name="Owner",
+                display_name="Test Owner",
+                username="test-owner",
+            ))
+    return store
 
 
 @pytest.fixture
 def store():
     """Fresh in-memory database for each test."""
 
-    s = MemoryStore("sqlite+pysqlite:///:memory:")
-    s.initialize()
+    s = _make_store()
     yield s
     s.close()
 
 
 @pytest.fixture
 def emily(store: MemoryStore):
-    """Create a test person named Emily with aliases."""
+    """Create a test person named Emily."""
 
     return store.upsert_person(
         name="Emily Chen",
-        aliases=["Em", "Dr. Chen"],
         face_key="face_emily_001",
         voice_key="voice_emily_001",
         persona90=[0.5] * 90,
@@ -55,7 +71,6 @@ def john(store: MemoryStore):
 
     return store.upsert_person(
         name="John Rivera",
-        aliases=["Johnny"],
         face_key="face_john_001",
         voice_key="voice_john_001",
     )
@@ -68,59 +83,22 @@ class TestUpsertPerson:
         assert emily.face_key == "face_emily_001"
         assert emily.voice_key == "voice_emily_001"
         assert len(emily.persona90) == 90
-        assert sorted(emily.aliases) == sorted(["Em", "Dr. Chen"])
 
     def test_upsert_updates_existing(self, store, emily):
         updated = store.upsert_person(
             name="Emily Chen",
-            aliases=["Em", "Emmy"],
             face_key="face_emily_002",
         )
         assert updated.id == emily.id
         assert updated.face_key == "face_emily_002"
-        assert "Emmy" in updated.aliases
-        assert "Dr. Chen" not in updated.aliases
-
-    def test_default_owner_user_created(self, store, emily):
-        with store.Session() as session:
-            users = session.query(User).all()
-        assert len(users) == 1
-        assert users[0].username == "memory-store-owner"
 
     def test_persona90_must_be_0_or_90(self, store):
         with pytest.raises(ValueError, match="0 or 90"):
-            store.upsert_person(name="Bad Person", aliases=[], persona90=[1.0] * 50)
+            store.upsert_person(name="Bad Person", persona90=[1.0] * 50)
 
     def test_empty_name_rejected(self, store):
         with pytest.raises(ValueError):
-            store.upsert_person(name="", aliases=[])
-
-    def test_duplicate_aliases_rejected(self, store):
-        with pytest.raises(ValueError, match="unique"):
-            store.upsert_person(name="X", aliases=["a", "A"])
-
-
-class TestResolvePerson:
-    def test_resolve_by_name(self, store, emily):
-        found = store.resolve_person_by_name_or_alias("Emily Chen")
-        assert found is not None
-        assert found.id == emily.id
-
-    def test_resolve_by_alias(self, store, emily):
-        found = store.resolve_person_by_name_or_alias("Em")
-        assert found is not None
-        assert found.id == emily.id
-
-    def test_resolve_case_insensitive(self, store, emily):
-        found = store.resolve_person_by_name_or_alias("dr. chen")
-        assert found is not None
-        assert found.id == emily.id
-
-    def test_resolve_unknown_returns_none(self, store, emily):
-        assert store.resolve_person_by_name_or_alias("Nobody") is None
-
-    def test_resolve_empty_string_returns_none(self, store, emily):
-        assert store.resolve_person_by_name_or_alias("  ") is None
+            store.upsert_person(name="")
 
 
 class TestWriteEpisode:
@@ -192,19 +170,6 @@ class TestWriteFact:
             store.write_fact(person_id=uuid4(), fact_text="test")
 
 
-class TestWritePref:
-    def test_write_pref(self, store, emily):
-        pid = store.write_pref(
-            person_id=emily.id,
-            pref_text="energy: high",
-        )
-        assert pid
-
-        profile = store.get_profile_context(emily.id)
-        assert len(profile.prefs) == 1
-        assert profile.prefs[0].pref_text == "energy: high"
-
-
 class TestWriteSummary:
     def test_write_summary(self, store, emily):
         sid = store.write_summary(
@@ -273,14 +238,6 @@ class TestProfileContext:
             fact_text="the user has a pet dog named Max",
             confidence=0.8,
         )
-        store.write_pref(
-            person_id=emily.id,
-            pref_text="energy: high",
-        )
-        store.write_pref(
-            person_id=emily.id,
-            pref_text="sensitivity: low",
-        )
         store.write_summary(
             person_id=emily.id,
             summary_text="2024-05-13: the user asked about swimming.",
@@ -298,7 +255,6 @@ class TestProfileContext:
         profile = store.get_profile_context(emily.id)
 
         assert len(profile.facts) == 2
-        assert len(profile.prefs) == 2
         assert len(profile.summaries) == 1
         assert len(profile.edges_from) == 1
         assert len(profile.persona90) == 90
@@ -310,7 +266,6 @@ class TestProfileContext:
     def test_empty_profile(self, store, emily):
         profile = store.get_profile_context(emily.id)
         assert profile.facts == []
-        assert profile.prefs == []
         assert profile.summaries == []
         assert profile.edges_from == []
         assert len(profile.persona90) == 90
@@ -322,12 +277,12 @@ class TestProfileContext:
 
 class TestLifecycleAndErrors:
     def test_session_access_before_initialize_raises(self):
-        store = MemoryStore("sqlite+pysqlite:///:memory:")
+        store = MemoryStore("sqlite+pysqlite:///:memory:", owner_user_id=uuid4())
         with pytest.raises(RuntimeError, match="not initialized"):
             _ = store.Session
 
     def test_close_is_idempotent(self):
-        store = MemoryStore("sqlite+pysqlite:///:memory:")
+        store = MemoryStore("sqlite+pysqlite:///:memory:", owner_user_id=uuid4())
         store.close()
         store.initialize()
         store.close()
@@ -350,14 +305,6 @@ class TestLifecycleAndErrors:
                 episode_id=uuid4(),
             )
 
-    def test_write_pref_bad_episode_rejected(self, store, emily):
-        with pytest.raises(ValueError, match="Episode id=.* not found"):
-            store.write_pref(
-                person_id=emily.id,
-                pref_text="pref",
-                episode_id=uuid4(),
-            )
-
     def test_write_summary_bad_episode_rejected(self, store, emily):
         with pytest.raises(ValueError, match="Episode id=.* not found"):
             store.write_summary(
@@ -375,11 +322,6 @@ class TestLifecycleAndErrors:
                 episode_id=uuid4(),
             )
 
-    def test_upsert_person_alias_conflict_surfaces_value_error(self, store):
-        store.upsert_person(name="Alice Smith", aliases=["same-alias"])
-        with pytest.raises(ValueError, match="Unable to upsert person"):
-            store.upsert_person(name="Bob Jones", aliases=["same-alias"])
-
 
 class TestOrderingAndSerialization:
     def test_profile_context_returns_desc_created_order(self, store, emily, john):
@@ -387,9 +329,6 @@ class TestOrderingAndSerialization:
 
         older_fact = store.write_fact(person_id=emily.id, fact_text="old fact")
         newer_fact = store.write_fact(person_id=emily.id, fact_text="new fact")
-
-        older_pref = store.write_pref(person_id=emily.id, pref_text="old pref")
-        newer_pref = store.write_pref(person_id=emily.id, pref_text="new pref")
 
         older_summary = store.write_summary(person_id=emily.id, summary_text="old summary")
         newer_summary = store.write_summary(person_id=emily.id, summary_text="new summary")
@@ -402,9 +341,6 @@ class TestOrderingAndSerialization:
                 session.get(PersonFact, older_fact).created_at = now - timedelta(minutes=4)
                 session.get(PersonFact, newer_fact).created_at = now - timedelta(minutes=1)
 
-                session.get(Pref, older_pref).created_at = now - timedelta(minutes=5)
-                session.get(Pref, newer_pref).created_at = now - timedelta(minutes=2)
-
                 session.get(Summary, older_summary).created_at = now - timedelta(minutes=6)
                 session.get(Summary, newer_summary).created_at = now - timedelta(minutes=3)
 
@@ -415,8 +351,6 @@ class TestOrderingAndSerialization:
 
         assert profile.facts[0].fact_text == "new fact"
         assert profile.facts[1].fact_text == "old fact"
-        assert profile.prefs[0].pref_text == "new pref"
-        assert profile.prefs[1].pref_text == "old pref"
         assert profile.summaries[0].summary_text == "new summary"
         assert profile.summaries[1].summary_text == "old summary"
         assert profile.edges_from[0].relation == "new-rel"
