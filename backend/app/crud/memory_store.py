@@ -118,6 +118,47 @@ class MemoryStore:
             raise RuntimeError("MemoryStore not initialized - call .initialize() first")
         return self._Session
 
+    def create_person(
+        self,
+        name: str,
+        aliases: list[str],
+        face_key: Optional[str] = None,
+        voice_key: Optional[str] = None,
+        persona90: Optional[list[float]] = None,
+    ) -> PersonOut:
+        """Create a new interlocutor for the current owner.
+
+        Unlike :meth:`upsert_person`, this method never resolves by name first.
+        It is intended for identity-resolution flows where a new biometric
+        signal should always produce a distinct person record when no direct
+        key match exists.
+
+        Returns:
+            The stored person record.
+        """
+
+        data = PersonIn(
+            name=name,
+            aliases=aliases,
+            face_key=face_key,
+            voice_key=voice_key,
+            persona90=persona90 or [],
+        )
+
+        with self.Session() as session:
+            try:
+                with session.begin():
+                    owner = self._get_or_create_owner(session)
+                    person = self._insert_person(session, owner.id, data)
+                    logger.debug("Inserted person id=%s name=%s", person.id, data.name)
+                    session.execute(delete(Alias).where(Alias.person_id == person.id))
+                    for alias in data.aliases:
+                        session.add(Alias(person_id=person.id, alias=alias))
+
+                return self._load_person(session, person.id)
+            except IntegrityError as exc:
+                raise ValueError(f"Unable to create person '{name}': {exc.orig}") from exc
+
     def upsert_person(
         self,
         name: str,
@@ -158,18 +199,7 @@ class MemoryStore:
                     )
 
                     if person is None:
-                        first_name, last_name, display_name = _split_name(data.name)
-                        person = Person(
-                            user_id=owner.id,
-                            first_name=first_name,
-                            last_name=last_name,
-                            display_name=display_name,
-                            face_key=data.face_key,
-                            voice_key=data.voice_key,
-                            persona90=data.persona90,
-                        )
-                        session.add(person)
-                        session.flush()
+                        person = self._insert_person(session, owner.id, data)
                         logger.debug("Inserted person id=%s name=%s", person.id, data.name)
                     else:
                         if data.face_key is not None:
@@ -193,6 +223,37 @@ class MemoryStore:
                 return self._load_person(session, person.id)
             except IntegrityError as exc:
                 raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
+
+    def resolve_person_by_face_key(self, face_key: str) -> Optional[PersonOut]:
+        """Resolve a person by stored ``face_key`` for the current owner.
+
+        Blank input returns ``None`` instead of raising.
+
+        Returns:
+            The matching person record, or ``None`` when no match exists.
+        """
+
+        cleaned = face_key.strip()
+        if not cleaned:
+            return None
+
+        with self.Session() as session:
+            owner = self._get_or_create_owner(session)
+            person = session.scalar(
+                select(Person)
+                .where(
+                    Person.user_id == owner.id,
+                    Person.face_key == cleaned,
+                )
+                .limit(1)
+            )
+
+            if person is None:
+                logger.debug("resolve_person_by_face_key: no match for '%s'", cleaned)
+                return None
+
+            logger.debug("resolve_person_by_face_key: '%s' -> id=%s", cleaned, person.id)
+            return self._load_person(session, person.id)
 
     def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
         """Resolve a person by display name or alias for the current owner.
@@ -632,6 +693,21 @@ class MemoryStore:
             created_at=_iso(person.created_at) or "",
             updated_at=_iso(person.updated_at) or "",
         )
+
+    def _insert_person(self, session: Session, owner_id: UUID, data: PersonIn) -> Person:
+        first_name, last_name, display_name = _split_name(data.name)
+        person = Person(
+            user_id=owner_id,
+            first_name=first_name,
+            last_name=last_name,
+            display_name=display_name,
+            face_key=data.face_key,
+            voice_key=data.voice_key,
+            persona90=data.persona90,
+        )
+        session.add(person)
+        session.flush()
+        return person
 
     def _get_or_create_owner(self, session: Session) -> User:
         if self._owner_user_id is not None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -32,9 +31,3 @@ class UserRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     facts: list[UserFactRead] = Field(default_factory=list)
-
-
-class WearerStateRead(BaseModel):
-    """Serialized wearer state consumed by the interlocutor tracker."""
-
-    wearer_person_id: UUID

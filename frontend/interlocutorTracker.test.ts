@@ -19,7 +19,6 @@ test("loads context only when interlocutor identity changes", async () => {
       { atMs: 70, personId: "person_alice" },
       { atMs: 250, personId: "person_bob" },
     ]),
-    loadWearerState: () => ({ wearer_person_id: "wearer_1" }),
     getProfileContext: async (personId: string) => {
       calls.push(personId);
       return { personId };
@@ -34,7 +33,6 @@ test("loads context only when interlocutor identity changes", async () => {
   await wait(380);
   await tracker.stop();
 
-  assert.equal(tracker.wearer_person_id, "wearer_1");
   assert.equal(tracker.activeInterlocutorPersonId, "person_bob");
   assert.deepEqual(calls, ["person_alice", "person_bob"]);
   assert.deepEqual(events, ["null->person_alice", "person_alice->person_bob"]);
@@ -51,7 +49,6 @@ test("does not switch on a transient identity due to debounce", async () => {
       { atMs: 70, personId: "person_alice" },
       { atMs: 100, personId: null },
     ]),
-    loadWearerState: () => ({ wearer_person_id: "wearer_1" }),
     getProfileContext: async (personId: string) => {
       calls.push(personId);
       return { personId };
@@ -78,7 +75,6 @@ test("continues polling after a get_profile_context failure", async () => {
       { atMs: 0, personId: null },
       { atMs: 70, personId: "person_alice" },
     ]),
-    loadWearerState: () => ({ wearer_person_id: "wearer_1" }),
     getProfileContext: async () => {
       attempt += 1;
       if (attempt === 1) throw new Error("temporary profile fetch failure");
