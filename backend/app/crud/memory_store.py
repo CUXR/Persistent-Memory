@@ -1,20 +1,20 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timezone
 import logging
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import create_engine, delete, func, or_, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from ..core.config import get_settings
 from ..core.database import Base
 from ..models.episode import Episode
-from ..models.memory import Alias, Edge, EpisodeParticipant, Pref, Summary
+from ..models.memory import Edge, EpisodeParticipant, Summary
 from ..models.person import Person, PersonFact
 from ..models.user import User, UserFact
 from ..schema.memory import (
@@ -25,14 +25,16 @@ from ..schema.memory import (
     FactOut,
     PersonIn,
     PersonOut,
-    PrefIn,
-    PrefOut,
     ProfileContext,
     SummaryIn,
     SummaryOut,
 )
 
 logger = logging.getLogger("app.crud.memory_store")
+settings = get_settings()
+
+# Priority order for fact categories used in disambiguation
+FACT_CATEGORY_PRIORITY = ("visual_descriptor", "affiliation", "hobby")
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -66,26 +68,26 @@ def _split_name(name: str) -> tuple[str, str, str]:
 class MemoryStore:
     """Typed, deterministic memory access layer over the project schema."""
 
-    def __init__(self, db_url: str | None = None, owner_user_id: UUID | None = None) -> None:
-        """Create a store bound to an optional database URL and owner user.
+    def __init__(self, db_url: str | None = None, *, owner_user_id: UUID) -> None:
+        """Create a store bound to a database URL and owner user.
 
         Args:
             db_url: Override for the configured database URL.
-            owner_user_id: Existing user UUID that owns all memory records created
-                through this store. When omitted, the store will reuse the first
-                available user or create a default owner on first write.
+            owner_user_id: UUID of the user that owns all memory records
+                created and queried through this store.  The caller is
+                responsible for ensuring this user exists in the database.
         """
 
-        self._db_url = db_url or get_settings().database_url
+        self._db_url = db_url or settings.database_url
         self._owner_user_id = owner_user_id
-        # Track whether the owner UUID was explicitly supplied by the caller.
-        # When True, a missing owner is always a programming error and raises.
-        # When False, a stale cache (e.g. from a rolled-back read-only session)
-        # should silently recover by re-discovering or re-creating the owner.
-        self._explicit_owner: bool = owner_user_id is not None
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
-        logger.info("MemoryStore created (db_url=%s)", self._db_url)
+        logger.info("MemoryStore created (db_url=%s, owner=%s)", self._db_url, owner_user_id)
+
+    @property
+    def owner_user_id(self) -> UUID:
+        """The UUID of the owner user scoping all operations."""
+        return self._owner_user_id
 
     def initialize(self, create_schema: bool = True) -> None:
         """Initialize the SQLAlchemy engine and create tables when requested."""
@@ -118,10 +120,11 @@ class MemoryStore:
             raise RuntimeError("MemoryStore not initialized - call .initialize() first")
         return self._Session
 
+    # ── Person CRUD ──────────────────────────────────────────
+
     def upsert_person(
         self,
         name: str,
-        aliases: list[str],
         face_key: Optional[str] = None,
         voice_key: Optional[str] = None,
         persona90: Optional[list[float]] = None,
@@ -130,8 +133,7 @@ class MemoryStore:
 
         The lookup is case-insensitive on the person's display name within the
         active owner scope. When a matching person already exists, the supplied
-        keys and persona vector are updated and the alias collection is replaced
-        with the provided set.
+        keys and persona vector are updated.
 
         Returns:
             The normalized stored person record.
@@ -139,7 +141,6 @@ class MemoryStore:
 
         data = PersonIn(
             name=name,
-            aliases=aliases,
             face_key=face_key,
             voice_key=voice_key,
             persona90=persona90 or [],
@@ -147,58 +148,68 @@ class MemoryStore:
         persona_supplied = persona90 is not None
 
         with self.Session() as session:
-            try:
-                with session.begin():
-                    owner = self._get_or_create_owner(session)
-                    person = session.scalar(
-                        select(Person).where(
-                            Person.user_id == owner.id,
-                            func.lower(func.coalesce(Person.display_name, "")) == data.name.lower(),
-                        )
+            with session.begin():
+                person = session.scalar(
+                    select(Person).where(
+                        Person.user_id == self._owner_user_id,
+                        func.lower(func.coalesce(Person.display_name, "")) == data.name.lower(),
                     )
+                )
 
-                    if person is None:
-                        first_name, last_name, display_name = _split_name(data.name)
-                        person = Person(
-                            user_id=owner.id,
-                            first_name=first_name,
-                            last_name=last_name,
-                            display_name=display_name,
-                            face_key=data.face_key,
-                            voice_key=data.voice_key,
-                            persona90=data.persona90,
-                        )
-                        session.add(person)
-                        session.flush()
-                        logger.debug("Inserted person id=%s name=%s", person.id, data.name)
-                    else:
-                        if data.face_key is not None:
-                            person.face_key = data.face_key
-                        if data.voice_key is not None:
-                            person.voice_key = data.voice_key
-                        if persona_supplied:
-                            person.persona90 = data.persona90
-                        first_name, last_name, display_name = _split_name(data.name)
-                        person.first_name = first_name
-                        person.last_name = last_name
-                        person.display_name = display_name
-                        person.updated_at = datetime.now(timezone.utc)
-                        session.flush()
-                        logger.debug("Updated person id=%s name=%s", person.id, data.name)
+                if person is None:
+                    first_name, last_name, display_name = _split_name(data.name)
+                    person = Person(
+                        user_id=self._owner_user_id,
+                        first_name=first_name,
+                        last_name=last_name,
+                        display_name=display_name,
+                        face_key=data.face_key,
+                        voice_key=data.voice_key,
+                        persona90=data.persona90,
+                    )
+                    session.add(person)
+                    session.flush()
+                    logger.debug("Inserted person id=%s name=%s", person.id, data.name)
+                else:
+                    if data.face_key is not None:
+                        person.face_key = data.face_key
+                    if data.voice_key is not None:
+                        person.voice_key = data.voice_key
+                    if persona_supplied:
+                        person.persona90 = data.persona90
+                    first_name, last_name, display_name = _split_name(data.name)
+                    person.first_name = first_name
+                    person.last_name = last_name
+                    person.display_name = display_name
+                    person.updated_at = datetime.now(timezone.utc)
+                    session.flush()
+                    logger.debug("Updated person id=%s name=%s", person.id, data.name)
 
-                    session.execute(delete(Alias).where(Alias.person_id == person.id))
-                    for alias in data.aliases:
-                        session.add(Alias(person_id=person.id, alias=alias))
+            return self._load_person(session, person.id)
 
-                return self._load_person(session, person.id)
-            except IntegrityError as exc:
-                raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
+    def list_people(self) -> list[Person]:
+        """Return all people for the current owner.
 
-    def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
-        """Resolve a person by display name or alias for the current owner.
+        Returns:
+            Person ORM instances.
+            An empty list when no people exist for the owner.
+        """
 
-        The match is case-insensitive and restricted to people owned by the
-        store's active user. Blank input returns ``None`` instead of raising.
+        with self.Session() as session:
+            people = list(
+                session.scalars(
+                    select(Person).where(Person.user_id == self._owner_user_id)
+                ).all()
+            )
+            logger.debug("list_people: %d people for owner=%s", len(people), self._owner_user_id)
+            return people
+
+    def resolve_person_by_name(self, text: str) -> Optional[PersonOut]:
+        """Resolve a person by display name for the current owner.
+
+        Case-insensitive match on display_name. Used by the ingestion pipeline
+        for exact-name lookups. For query-based resolution with ambiguity
+        handling, use PersonResolver instead.
 
         Returns:
             The matching person record, or ``None`` when no match exists.
@@ -209,18 +220,11 @@ class MemoryStore:
             return None
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
             person = session.scalar(
-                select(Person)
-                .outerjoin(Alias, Alias.person_id == Person.id)
-                .where(
-                    Person.user_id == owner.id,
-                    or_(
-                        func.lower(func.coalesce(Person.display_name, "")) == cleaned.lower(),
-                        func.lower(Alias.alias) == cleaned.lower(),
-                    )
+                select(Person).where(
+                    Person.user_id == self._owner_user_id,
+                    func.lower(func.coalesce(Person.display_name, "")) == cleaned.lower(),
                 )
-                .limit(1)
             )
 
             if person is None:
@@ -229,6 +233,8 @@ class MemoryStore:
 
             logger.debug("resolve_person: '%s' -> id=%s", cleaned, person.id)
             return self._load_person(session, person.id)
+
+    # ── Episode / Fact / Summary / Edge writes ───────────────
 
     def write_episode(
         self,
@@ -239,10 +245,6 @@ class MemoryStore:
         participants: Optional[list[UUID]] = None,
     ) -> UUID:
         """Insert a conversation episode and its participant links.
-
-        The first participant becomes the primary ``Episode.person_id`` so the
-        episode remains compatible with the main schema, while every supplied
-        participant is also written to ``EpisodeParticipant``.
 
         Returns:
             The UUID of the created episode row.
@@ -258,14 +260,13 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                owner = self._get_or_create_owner(session)
                 ordered_participants = list(dict.fromkeys(data.participant_ids))
                 if not ordered_participants:
                     raise ValueError("write_episode requires at least one participant")
-                self._assert_people_exist(session, ordered_participants, owner.id)
+                self._assert_people_exist(session, ordered_participants, self._owner_user_id)
 
                 episode = Episode(
-                    user_id=owner.id,
+                    user_id=self._owner_user_id,
                     person_id=ordered_participants[0],
                     start_time=data.time_start,
                     end_time=data.time_end,
@@ -280,13 +281,7 @@ class MemoryStore:
 
                 episode_id = episode.id
 
-            logger.debug(
-                "Wrote episode id=%s (%s -> %s, %d participants)",
-                episode_id,
-                data.time_start.isoformat(),
-                data.time_end.isoformat(),
-                len(ordered_participants),
-            )
+            logger.debug("Wrote episode id=%s", episode_id)
             return episode_id
 
     def write_fact(
@@ -300,9 +295,6 @@ class MemoryStore:
         valid_to: Optional[datetime] = None,
     ) -> UUID:
         """Persist a structured fact about a person.
-
-        The person must belong to the current owner. When ``episode_id`` is
-        provided, the fact is linked back to the episode where it was learned.
 
         Returns:
             The UUID of the created fact row.
@@ -320,9 +312,8 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                owner = self._get_or_create_owner(session)
-                self._assert_person_exists(session, data.person_id, owner.id)
-                self._assert_episode_exists(session, data.episode_id, owner.id)
+                self._assert_person_exists(session, data.person_id, self._owner_user_id)
+                self._assert_episode_exists(session, data.episode_id, self._owner_user_id)
 
                 row = PersonFact(
                     person_id=data.person_id,
@@ -340,48 +331,6 @@ class MemoryStore:
             logger.debug("Wrote fact id=%s for person=%s", fact_id, data.person_id)
             return fact_id
 
-    def write_pref(
-        self,
-        person_id: UUID,
-        pref_text: str,
-        confidence: float = 1.0,
-        episode_id: Optional[UUID] = None,
-    ) -> UUID:
-        """Persist a preference remembered about a person.
-
-        Preferences are owner-scoped through the referenced person and may be
-        associated with an originating episode.
-
-        Returns:
-            The UUID of the created preference row.
-        """
-
-        data = PrefIn(
-            person_id=person_id,
-            pref_text=pref_text,
-            confidence=confidence,
-            episode_id=episode_id,
-        )
-
-        with self.Session() as session:
-            with session.begin():
-                owner = self._get_or_create_owner(session)
-                self._assert_person_exists(session, data.person_id, owner.id)
-                self._assert_episode_exists(session, data.episode_id, owner.id)
-
-                row = Pref(
-                    person_id=data.person_id,
-                    pref_text=data.pref_text,
-                    confidence=_decimal(data.confidence),
-                    episode_id=data.episode_id,
-                )
-                session.add(row)
-                session.flush()
-                pref_id = row.id
-
-            logger.debug("Wrote pref id=%s for person=%s", pref_id, data.person_id)
-            return pref_id
-
     def write_summary(
         self,
         person_id: UUID,
@@ -391,9 +340,6 @@ class MemoryStore:
         episode_id: Optional[UUID] = None,
     ) -> UUID:
         """Persist a summary slice for a person.
-
-        This stores the human-readable summary text plus optional time bounds
-        describing the source interaction window and an optional backing episode.
 
         Returns:
             The UUID of the created summary row.
@@ -409,9 +355,8 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                owner = self._get_or_create_owner(session)
-                self._assert_person_exists(session, data.person_id, owner.id)
-                self._assert_episode_exists(session, data.episode_id, owner.id)
+                self._assert_person_exists(session, data.person_id, self._owner_user_id)
+                self._assert_episode_exists(session, data.episode_id, self._owner_user_id)
 
                 row = Summary(
                     person_id=data.person_id,
@@ -437,9 +382,7 @@ class MemoryStore:
     ) -> UUID:
         """Create or update a directed relationship between two people.
 
-        Edges are unique by ``(src_id, relation, dst_id)``. Rewriting an
-        existing edge updates its confidence and optional episode reference
-        instead of creating a duplicate row.
+        Edges are unique by ``(src_id, relation, dst_id)``.
 
         Returns:
             The UUID of the inserted or updated edge row.
@@ -455,10 +398,9 @@ class MemoryStore:
 
         with self.Session() as session:
             with session.begin():
-                owner = self._get_or_create_owner(session)
-                self._assert_person_exists(session, data.src_id, owner.id)
-                self._assert_person_exists(session, data.dst_id, owner.id)
-                self._assert_episode_exists(session, data.episode_id, owner.id)
+                self._assert_person_exists(session, data.src_id, self._owner_user_id)
+                self._assert_person_exists(session, data.dst_id, self._owner_user_id)
+                self._assert_episode_exists(session, data.episode_id, self._owner_user_id)
 
                 edge = session.scalar(
                     select(Edge).where(
@@ -485,54 +427,71 @@ class MemoryStore:
 
                 edge_id = edge.id
 
-            logger.debug(
-                "Wrote edge id=%s: person %s -[%s]-> person %s",
-                edge_id,
-                data.src_id,
-                data.relation,
-                data.dst_id,
-            )
+            logger.debug("Wrote edge id=%s: %s -[%s]-> %s", edge_id, data.src_id, data.relation, data.dst_id)
             return edge_id
+
+    # ── Read methods ─────────────────────────────────────────
 
     def get_user_facts(self) -> list[str]:
         """Return all fact texts stored for the current owner user.
 
-        Used by the ingestion pipeline to provide wearer context when detecting
-        shared interests between the wearer and an interlocutor.
+        Used by the ingestion pipeline to provide wearer context.
         """
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
             rows = session.scalars(
                 select(UserFact.fact_text)
-                .where(UserFact.user_id == owner.id)
+                .where(UserFact.user_id == self._owner_user_id)
                 .order_by(UserFact.created_at.asc())
             ).all()
             return list(rows)
 
-    def get_profile_context(self, person_id: UUID) -> ProfileContext:
-        """Return the issue-specified profile context bundle for one person.
+    def get_disambiguation_hints(self, person_id: UUID) -> dict[str, list[str]]:
+        """Return categorized fact texts for person disambiguation.
 
-        The returned structure contains facts, preferences, summaries, outgoing
-        edges, and the stored ``persona90`` vector ordered newest-first within
-        each collection.
+        Groups facts by ``fact_category`` in priority order:
+        visual_descriptor, affiliation, hobby.
+
+        Returns:
+            Dict keyed by category with lists of fact_text strings.
+            Categories with no facts are omitted.
+        """
+
+        with self.Session() as session:
+            rows = session.execute(
+                select(PersonFact.fact_category, PersonFact.fact_text)
+                .where(
+                    PersonFact.person_id == person_id,
+                    PersonFact.fact_category.isnot(None),
+                )
+                .order_by(PersonFact.created_at.desc())
+            ).all()
+
+            hints: dict[str, list[str]] = {}
+            for category in FACT_CATEGORY_PRIORITY:
+                texts = [text for cat, text in rows if cat == category]
+                if texts:
+                    hints[category] = texts
+
+            return hints
+
+    def get_profile_context(self, person_id: UUID) -> ProfileContext:
+        """Return the profile context bundle for one person.
+
+        The returned structure contains facts, summaries, outgoing edges,
+        and the stored ``persona90`` vector ordered newest-first.
 
         Returns:
             A ``ProfileContext`` ready for deterministic retrieval use.
         """
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
-            person = self._get_person(session, person_id, owner.id)
+            person = self._get_person(session, person_id, self._owner_user_id)
 
             facts_rows = session.scalars(
                 select(PersonFact)
                 .where(PersonFact.person_id == person_id)
                 .order_by(PersonFact.created_at.desc())
-            ).all()
-
-            prefs_rows = session.scalars(
-                select(Pref).where(Pref.person_id == person_id).order_by(Pref.created_at.desc())
             ).all()
 
             summaries_rows = session.scalars(
@@ -563,17 +522,6 @@ class MemoryStore:
                 for row in facts_rows
             ]
 
-            prefs = [
-                PrefOut(
-                    id=row.id,
-                    pref_text=row.pref_text,
-                    confidence=_float(row.confidence),
-                    episode_id=row.episode_id,
-                    created_at=_iso(row.created_at) or "",
-                )
-                for row in prefs_rows
-            ]
-
             summaries = [
                 SummaryOut(
                     id=row.id,
@@ -599,28 +547,17 @@ class MemoryStore:
                 for edge, dst_name in edge_rows
             ]
 
-            logger.debug(
-                "Profile context for person=%s: %d facts, %d prefs, %d summaries, %d edges",
-                person_id,
-                len(facts),
-                len(prefs),
-                len(summaries),
-                len(edges),
-            )
-
             return ProfileContext(
                 facts=facts,
-                prefs=prefs,
                 summaries=summaries,
                 edges_from=edges,
                 persona90=person.persona90 or [],
             )
 
+    # ── Private helpers ──────────────────────────────────────
+
     def _load_person(self, session: Session, person_id: UUID) -> PersonOut:
         person = self._get_person(session, person_id, person_user_id=None)
-        aliases = session.scalars(
-            select(Alias.alias).where(Alias.person_id == person_id).order_by(Alias.alias.asc())
-        ).all()
 
         return PersonOut(
             id=person.id,
@@ -628,41 +565,9 @@ class MemoryStore:
             face_key=person.face_key,
             voice_key=person.voice_key,
             persona90=person.persona90 or [],
-            aliases=list(aliases),
             created_at=_iso(person.created_at) or "",
             updated_at=_iso(person.updated_at) or "",
         )
-
-    def _get_or_create_owner(self, session: Session) -> User:
-        if self._owner_user_id is not None:
-            owner = session.get(User, self._owner_user_id)
-            if owner is not None:
-                return owner
-            if self._explicit_owner:
-                # Caller supplied a specific UUID — a missing row is always an error.
-                raise ValueError(f"Owner user id={self._owner_user_id} not found")
-            # Auto-cached UUID is stale (e.g. from a rolled-back read-only session).
-            # Clear the cache and fall through to re-discover / re-create below.
-            logger.debug(
-                "_get_or_create_owner: stale cached id=%s, re-discovering owner",
-                self._owner_user_id,
-            )
-            self._owner_user_id = None
-
-        owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
-        if owner is None:
-            owner = User(
-                first_name="Memory",
-                last_name="Owner",
-                display_name="Memory Store Owner",
-                username="memory-store-owner",
-            )
-            session.add(owner)
-            session.flush()
-            logger.debug("Created default owner user id=%s", owner.id)
-
-        self._owner_user_id = owner.id
-        return owner
 
     def _get_person(self, session: Session, person_id: UUID, person_user_id: UUID | None) -> Person:
         person = session.get(Person, person_id)
