@@ -3,6 +3,6 @@
     "test": "node --experimental-strip-types --test ./*.test.ts"
   },
   "devDependencies": {
-    "@types/node": "^25.3.3"
+    "@types/node": "^25.6.0"
   }
 }
