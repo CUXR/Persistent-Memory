@@ -4,53 +4,69 @@ backend/app/schema/memory.py
 Pydantic models for the EgoMem memory store.
 
 Every public method on MemoryStore accepts and returns these models.
-This gives us:
-  - runtime input validation (replaces Zod from the TS world)
-  - auto-generated JSON schemas (useful for FastAPI)
-  - a single place to see every data shape in the system
-
-Design notes:
-  - "In" models  = what you pass INTO a method  (write inputs)
-  - "Out" models = what you get BACK from a method (read outputs)
-  - ProfileContext = the composite shape returned by get_profile_context()
-                     This maps directly to the Level-1 MemChunk content
-                     that gets injected into the dialog model (Eq. 2: p_t).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-# Allowed categories for PersonFact.fact_category (mirrors DB CHECK constraint)
-PersonFactCategory = Literal["visual_descriptor", "affiliation", "hobby"]
+from ..core.config import get_settings
 
+settings = get_settings()
 
-# ── Shared validators ────────────────────────────────────────
+_FACT_CATEGORIES = {
+    "general",
+    "visual_descriptor",
+    "affiliation",
+    "hobby",
+    "biographical",
+    "relationship",
+    "other",
+}
+
 
 def _check_confidence(v: float) -> float:
-    """Confidence must be between 0 and 1 inclusive."""
     if not 0.0 <= v <= 1.0:
         raise ValueError(f"confidence must be in [0, 1], got {v}")
     return v
 
 
 def _check_persona90(v: list[float]) -> list[float]:
-    """persona90 must be exactly 90 floats (or empty)."""
     if len(v) != 0 and len(v) != 90:
         raise ValueError(f"persona90 must have 0 or 90 elements, got {len(v)}")
     return v
 
 
-#input schemas
+def _check_retrieval_embedding(v: list[float] | None) -> list[float] | None:
+    if v is None:
+        return None
+    if len(v) != settings.retrieval_embedding_dimension:
+        raise ValueError(
+            "embedding must have "
+            f"{settings.retrieval_embedding_dimension} elements, got {len(v)}"
+        )
+    return v
 
-#validates name length and persona length rule
+
+def _normalize_fact_category(v: str) -> str:
+    normalized = v.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized == "affilation":
+        normalized = "affiliation"
+    if normalized not in _FACT_CATEGORIES:
+        allowed = ", ".join(sorted(_FACT_CATEGORIES))
+        raise ValueError(f"fact_category must be one of: {allowed}")
+    return normalized
+
+
 class PersonIn(BaseModel):
     """Input for upsert_person()."""
+
     name: str = Field(..., min_length=1, max_length=200)
+    aliases: list[str] = Field(default_factory=list)
     face_key: Optional[str] = None
     voice_key: Optional[str] = None
     persona90: list[float] = Field(default_factory=list)
@@ -60,9 +76,18 @@ class PersonIn(BaseModel):
     def validate_persona90(cls, v: list[float]) -> list[float]:
         return _check_persona90(v)
 
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, v: list[str]) -> list[str]:
+        cleaned = [a.strip() for a in v if a.strip()]
+        if len(cleaned) != len(set(a.lower() for a in cleaned)):
+            raise ValueError("aliases must be unique (case-insensitive)")
+        return cleaned
+
 
 class EpisodeIn(BaseModel):
     """Input for write_episode()."""
+
     time_start: datetime
     time_end: datetime
     transcript: str = ""
@@ -79,19 +104,31 @@ class EpisodeIn(BaseModel):
 
 
 class FactIn(BaseModel):
-    """Input for write_fact()."""
+    """Input shape for saving one fact."""
+
     person_id: UUID
+    fact_category: str = "general"
     fact_text: str = Field(..., min_length=1)
     confidence: float = 1.0
-    fact_category: Optional[PersonFactCategory] = None
-    episode_id: Optional[UUID] = None
+    source: Optional[UUID] = None
+    embedding: list[float] | None = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
+
+    @field_validator("fact_category")
+    @classmethod
+    def validate_fact_category(cls, v: str) -> str:
+        return _normalize_fact_category(v)
 
     @field_validator("confidence")
     @classmethod
     def validate_confidence(cls, v: float) -> float:
         return _check_confidence(v)
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding(cls, v: list[float] | None) -> list[float] | None:
+        return _check_retrieval_embedding(v)
 
     @field_validator("valid_to")
     @classmethod
@@ -102,8 +139,23 @@ class FactIn(BaseModel):
         return v
 
 
+class PrefIn(BaseModel):
+    """Input for write_pref()."""
+
+    person_id: UUID
+    pref_text: str = Field(..., min_length=1)
+    confidence: float = 1.0
+    episode_id: Optional[UUID] = None
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        return _check_confidence(v)
+
+
 class SummaryIn(BaseModel):
     """Input for write_summary()."""
+
     person_id: UUID
     summary_text: str = Field(..., min_length=1)
     episode_time_start: Optional[datetime] = None
@@ -118,9 +170,10 @@ class SummaryIn(BaseModel):
             raise ValueError("episode_time_end must be >= episode_time_start")
         return v
 
-#enforces non-empty relation and forbids self edges
+
 class EdgeIn(BaseModel):
     """Input for write_edge()."""
+
     src_id: UUID
     relation: str = Field(..., min_length=1, max_length=100)
     dst_id: UUID
@@ -140,26 +193,47 @@ class EdgeIn(BaseModel):
         return v
 
 
-#outputs schemas
-
 class PersonOut(BaseModel):
     id: UUID
     name: str
     face_key: Optional[str]
     voice_key: Optional[str]
     persona90: list[float]
+    aliases: list[str]
     created_at: str
     updated_at: str
 
 
 class FactOut(BaseModel):
+    """Output shape for one stored fact."""
+
     id: UUID
+    fact_category: str
     fact_text: str
     confidence: float
-    fact_category: Optional[str] = None
-    episode_id: Optional[UUID]
+    source: Optional[UUID]
+    embedding: list[float] | None = None
+    episode_id: Optional[UUID] = None
     valid_from: Optional[str]
     valid_to: Optional[str]
+    created_at: str
+
+    @field_validator("fact_category")
+    @classmethod
+    def validate_fact_category(cls, v: str) -> str:
+        return _normalize_fact_category(v)
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding(cls, v: list[float] | None) -> list[float] | None:
+        return _check_retrieval_embedding(v)
+
+
+class PrefOut(BaseModel):
+    id: UUID
+    pref_text: str
+    confidence: float
+    episode_id: Optional[UUID]
     created_at: str
 
 
@@ -183,18 +257,19 @@ class EdgeOut(BaseModel):
 
 
 class ProfileContext(BaseModel):
-    """
-    The composite view returned by get_profile_context().
+    """Output shape returned by ``get_profile_context(person_id)``."""
 
-    This is the Python equivalent of the Level-1 MemChunk content
-    from the paper. When the retrieval process identifies a user,
-    it calls get_profile_context(person_id) and the result gets
-    serialized into the text channel of the MemChunk (Eq. 2: p_t).
-
-    Shape matches the issue spec:
-        { facts, summaries, edges_from, persona90 }
-    """
     facts: list[FactOut] = Field(default_factory=list)
+    prefs: list[PrefOut] = Field(default_factory=list)
     summaries: list[SummaryOut] = Field(default_factory=list)
     edges_from: list[EdgeOut] = Field(default_factory=list)
     persona90: list[float] = Field(default_factory=list)
+
+
+class RetrievedPersonContext(BaseModel):
+    """Output shape returned by ``retrieve_person_context(person_id, query)``."""
+
+    person_id: UUID
+    facts: list[FactOut] = Field(default_factory=list)
+    summaries: list[SummaryOut] = Field(default_factory=list)
+    edges: list[EdgeOut] = Field(default_factory=list)

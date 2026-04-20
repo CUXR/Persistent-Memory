@@ -1,5 +1,10 @@
 {
+  "scripts": {
+    "eval": "tsx eval/index.ts"
+  },
   "devDependencies": {
-    "@types/node": "^25.3.3"
+    "@types/node": "^25.3.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
   }
 }

@@ -21,9 +21,12 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.crud.memory_store import MemoryStore
+from app.core.config import get_settings
 from app.models.memory import Edge, Summary
 from app.models.person import PersonFact
 from app.models.user import User
+
+settings = get_settings()
 
 
 def _make_store() -> MemoryStore:
@@ -144,6 +147,7 @@ class TestWriteFact:
         profile = store.get_profile_context(emily.id)
         assert len(profile.facts) == 1
         assert profile.facts[0].fact_text == "the user is a student born in 2013"
+        assert profile.facts[0].fact_category == "general"
         assert profile.facts[0].confidence == 0.95
 
     def test_temporal_fact(self, store, emily):
@@ -156,6 +160,31 @@ class TestWriteFact:
         )
         profile = store.get_profile_context(emily.id)
         assert profile.facts[0].valid_to is not None
+
+    def test_fact_category_source_and_embedding_round_trip(self, store, emily):
+        now = datetime.now(timezone.utc)
+        episode_id = store.write_episode(
+            time_start=now - timedelta(minutes=5),
+            time_end=now,
+            transcript="Emily talked about joining a robotics club.",
+            summary="Discussion about clubs.",
+            participants=[emily.id],
+        )
+
+        embedding = [0.01] * settings.retrieval_embedding_dimension
+        store.write_fact(
+            person_id=emily.id,
+            fact_text="Emily joined the robotics club",
+            fact_category="affilation",
+            source=episode_id,
+            embedding=embedding,
+        )
+
+        profile = store.get_profile_context(emily.id)
+        assert profile.facts[0].fact_category == "affiliation"
+        assert profile.facts[0].source == episode_id
+        assert profile.facts[0].embedding == embedding
+        assert profile.facts[0].episode_id == episode_id
 
     def test_bad_confidence_rejected(self, store, emily):
         with pytest.raises(ValueError, match="confidence"):
@@ -302,7 +331,15 @@ class TestLifecycleAndErrors:
             store.write_fact(
                 person_id=emily.id,
                 fact_text="test",
-                episode_id=uuid4(),
+                source=uuid4(),
+            )
+
+    def test_write_fact_bad_embedding_rejected(self, store, emily):
+        with pytest.raises(ValueError, match="embedding must have"):
+            store.write_fact(
+                person_id=emily.id,
+                fact_text="test",
+                embedding=[0.1] * 16,
             )
 
     def test_write_summary_bad_episode_rejected(self, store, emily):

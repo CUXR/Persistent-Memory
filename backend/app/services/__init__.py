@@ -1,18 +1,13 @@
-"""Services layer — business logic above the CRUD layer.
+"""Service-layer helpers for backend application workflows."""
 
-Public surface:
-
-* :func:`ingest_conversation` — full conversation ingestion pipeline
-* :class:`IngestionResult` — typed return value from the pipeline
-* :class:`EmbeddingProvider` — protocol for plugging in a RAG embedding backend
-"""
-
+from ..schema.ingestion import IngestionResult
 from .conversation_ingestion import ingest_conversation
 from .embedding import EmbeddingProvider
-from ..schema.ingestion import IngestionResult
+from .retrieval_service import retrieve_person_context
 
 __all__ = [
-    "ingest_conversation",
-    "IngestionResult",
     "EmbeddingProvider",
+    "IngestionResult",
+    "ingest_conversation",
+    "retrieve_person_context",
 ]

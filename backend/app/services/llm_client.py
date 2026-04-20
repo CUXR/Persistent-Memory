@@ -11,9 +11,7 @@ logic.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-from openai import AsyncOpenAI
+from typing import TYPE_CHECKING, Any
 
 from ..core.config import get_settings
 from ..schema.ingestion import (
@@ -22,7 +20,7 @@ from ..schema.ingestion import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger("app.services.llm_client")
 
@@ -92,8 +90,15 @@ class LLMClient:
         max_retries: int | None = None,
     ) -> None:
         settings = get_settings()
+        try:
+            from openai import AsyncOpenAI
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "openai package is required to construct LLMClient. "
+                "Install backend requirements before using the real ingestion client."
+            ) from exc
         self._model = model or settings.openai_model
-        self._client = AsyncOpenAI(
+        self._client: Any = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,
             max_retries=max_retries if max_retries is not None else settings.openai_max_retries,
         )

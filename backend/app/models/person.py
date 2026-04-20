@@ -17,8 +17,10 @@ try:
     from pgvector.sqlalchemy import Vector
 
     VECTOR_TYPE = Vector(settings.embedding_dimension).with_variant(JSON(), "sqlite")
+    FACT_VECTOR_TYPE = Vector(settings.retrieval_embedding_dimension).with_variant(JSON(), "sqlite")
 except ModuleNotFoundError:
     VECTOR_TYPE = JSON()
+    FACT_VECTOR_TYPE = JSON()
 
 PERSONA_TYPE = ARRAY(Float).with_variant(JSON(), "sqlite")
 
@@ -96,7 +98,15 @@ class PersonFact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "person_facts"
     __table_args__ = (
         CheckConstraint(
-            "fact_category IN ('visual_descriptor', 'affiliation', 'hobby')",
+            "fact_category IN ("
+            "'general', "
+            "'visual_descriptor', "
+            "'affiliation', "
+            "'hobby', "
+            "'biographical', "
+            "'relationship', "
+            "'other'"
+            ")",
             name="ck_person_facts_fact_category",
         ),
     )
@@ -106,14 +116,14 @@ class PersonFact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    source_episode_id: Mapped[Any | None] = mapped_column(
+    fact_category: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
+    source: Mapped[Any | None] = mapped_column(
         ForeignKey("episodes.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
     fact_text: Mapped[str] = mapped_column(Text, nullable=False)
-    fact_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(FACT_VECTOR_TYPE, nullable=True)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
