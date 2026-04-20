@@ -4,17 +4,6 @@ backend/app/schema/memory.py
 Pydantic models for the EgoMem memory store.
 
 Every public method on MemoryStore accepts and returns these models.
-This gives us:
-  - runtime input validation (replaces Zod from the TS world)
-  - auto-generated JSON schemas (useful for FastAPI)
-  - a single place to see every data shape in the system
-
-Design notes:
-  - "In" models  = what you pass INTO a method  (write inputs)
-  - "Out" models = what you get BACK from a method (read outputs)
-  - ProfileContext = the composite shape returned by get_profile_context()
-                     This maps directly to the Level-1 MemChunk content
-                     that gets injected into the dialog model (Eq. 2: p_t).
 """
 
 from __future__ import annotations
@@ -40,24 +29,19 @@ _FACT_CATEGORIES = {
 }
 
 
-# ── Shared validators ────────────────────────────────────────
-
 def _check_confidence(v: float) -> float:
-    """Confidence must be between 0 and 1 inclusive."""
     if not 0.0 <= v <= 1.0:
         raise ValueError(f"confidence must be in [0, 1], got {v}")
     return v
 
 
 def _check_persona90(v: list[float]) -> list[float]:
-    """persona90 must be exactly 90 floats (or empty)."""
     if len(v) != 0 and len(v) != 90:
         raise ValueError(f"persona90 must have 0 or 90 elements, got {len(v)}")
     return v
 
 
 def _check_retrieval_embedding(v: list[float] | None) -> list[float] | None:
-    """Fact embedding must match the configured retrieval dimension when present."""
     if v is None:
         return None
     if len(v) != settings.retrieval_embedding_dimension:
@@ -69,7 +53,6 @@ def _check_retrieval_embedding(v: list[float] | None) -> list[float] | None:
 
 
 def _normalize_fact_category(v: str) -> str:
-    """Normalize and validate fact_category."""
     normalized = v.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized == "affilation":
         normalized = "affiliation"
@@ -79,11 +62,9 @@ def _normalize_fact_category(v: str) -> str:
     return normalized
 
 
-#input schemas
-
-#validates name length, cleans aliases, ensure case-insensitivity and persona length rule
 class PersonIn(BaseModel):
     """Input for upsert_person()."""
+
     name: str = Field(..., min_length=1, max_length=200)
     aliases: list[str] = Field(default_factory=list)
     face_key: Optional[str] = None
@@ -106,6 +87,7 @@ class PersonIn(BaseModel):
 
 class EpisodeIn(BaseModel):
     """Input for write_episode()."""
+
     time_start: datetime
     time_end: datetime
     transcript: str = ""
@@ -122,11 +104,8 @@ class EpisodeIn(BaseModel):
 
 
 class FactIn(BaseModel):
-    """Input shape for saving one fact.
+    """Input shape for saving one fact."""
 
-    Takes a person ID, fact text, fact category, optional source episode UUID,
-    optional embedding vector, confidence, and optional validity dates.
-    """
     person_id: UUID
     fact_category: str = "general"
     fact_text: str = Field(..., min_length=1)
@@ -162,6 +141,7 @@ class FactIn(BaseModel):
 
 class PrefIn(BaseModel):
     """Input for write_pref()."""
+
     person_id: UUID
     pref_text: str = Field(..., min_length=1)
     confidence: float = 1.0
@@ -175,6 +155,7 @@ class PrefIn(BaseModel):
 
 class SummaryIn(BaseModel):
     """Input for write_summary()."""
+
     person_id: UUID
     summary_text: str = Field(..., min_length=1)
     episode_time_start: Optional[datetime] = None
@@ -189,9 +170,10 @@ class SummaryIn(BaseModel):
             raise ValueError("episode_time_end must be >= episode_time_start")
         return v
 
-#enforces non-empty relation and forbids self edges
+
 class EdgeIn(BaseModel):
     """Input for write_edge()."""
+
     src_id: UUID
     relation: str = Field(..., min_length=1, max_length=100)
     dst_id: UUID
@@ -211,8 +193,6 @@ class EdgeIn(BaseModel):
         return v
 
 
-#outputs schemas
-
 class PersonOut(BaseModel):
     id: UUID
     name: str
@@ -225,11 +205,8 @@ class PersonOut(BaseModel):
 
 
 class FactOut(BaseModel):
-    """Output shape for one stored fact.
+    """Output shape for one stored fact."""
 
-    Returns the saved fact text plus its category, source episode UUID,
-    optional embedding, confidence, and timestamps.
-    """
     id: UUID
     fact_category: str
     fact_text: str
@@ -280,12 +257,8 @@ class EdgeOut(BaseModel):
 
 
 class ProfileContext(BaseModel):
-    """
-    Output shape returned by ``get_profile_context(person_id)``.
+    """Output shape returned by ``get_profile_context(person_id)``."""
 
-    It contains all stored profile information for one person:
-    facts, preferences, summaries, outgoing edges, and persona values.
-    """
     facts: list[FactOut] = Field(default_factory=list)
     prefs: list[PrefOut] = Field(default_factory=list)
     summaries: list[SummaryOut] = Field(default_factory=list)
@@ -294,11 +267,7 @@ class ProfileContext(BaseModel):
 
 
 class RetrievedPersonContext(BaseModel):
-    """Output shape returned by ``retrieve_person_context(person_id, query)``.
-
-    It contains the relevant facts, summaries, and edges selected for the
-    user's question about one person.
-    """
+    """Output shape returned by ``retrieve_person_context(person_id, query)``."""
 
     person_id: UUID
     facts: list[FactOut] = Field(default_factory=list)

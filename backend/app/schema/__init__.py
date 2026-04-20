@@ -9,6 +9,7 @@ from .memory import (
     RetrievedPersonContext,
     SummaryOut,
 )
+from .person_resolver import ResolveCandidate, ResolveResult
 from .user import UserFactRead, UserRead
 
 __all__ = [
@@ -17,6 +18,8 @@ __all__ = [
     "PersonOut",
     "PrefOut",
     "ProfileContext",
+    "ResolveCandidate",
+    "ResolveResult",
     "RetrievedPersonContext",
     "SummaryOut",
     "UserFactRead",

@@ -32,7 +32,6 @@
 - `start_time` - timestamp of conversation start
 - `end_time` - timestamp of conversation end; nullable for in-progress conversations
 - `dialogue_summary` - summary of conversation
-- `summary_version` - optional version/model tag for the summary
 - `importance_score` - optional score for ranking memorable conversations
 - `user` - person wearing the glasses; links to `User`
 - `person` - person talking to; links to `Person`
@@ -43,10 +42,7 @@
 - `id` - UUID primary key
 - `name` - (`first_name`, `last_name`, `display_name`)
 - `username` - unique application username
-- `oauth_provider` - optional OAuth provider name
-- `oauth_subject` - optional OAuth subject/identifier from the provider
 - `facts` - stored in `UserFact`
-- `preferences` - JSON object of user settings/preferences
 - `dialogues` - linked through `Episodes`
 - `created_at` - timestamp when the user record was created
 - `updated_at` - timestamp when the user record was last updated
@@ -55,7 +51,5 @@
 - `id` - UUID primary key
 - `user_id` - links to `User`
 - `fact_text` - remembered fact about the user
-- `source` - optional source label for where the fact came from
-- `confidence` - optional confidence score for the fact
 - `created_at` - timestamp when the fact was created
 - `updated_at` - timestamp when the fact was last updated

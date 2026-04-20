@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ARRAY, DateTime, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy import ARRAY, CheckConstraint, DateTime, Float, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -96,6 +96,20 @@ class PersonFact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Structured fact remembered about an interlocutor."""
 
     __tablename__ = "person_facts"
+    __table_args__ = (
+        CheckConstraint(
+            "fact_category IN ("
+            "'general', "
+            "'visual_descriptor', "
+            "'affiliation', "
+            "'hobby', "
+            "'biographical', "
+            "'relationship', "
+            "'other'"
+            ")",
+            name="ck_person_facts_fact_category",
+        ),
+    )
 
     person_id: Mapped[Any] = mapped_column(
         ForeignKey("people.id", ondelete="CASCADE"),

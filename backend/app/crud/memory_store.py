@@ -16,7 +16,7 @@ from ..core.database import Base
 from ..models.episode import Episode
 from ..models.memory import Alias, Edge, EpisodeParticipant, Pref, Summary
 from ..models.person import Person, PersonFact
-from ..models.user import User
+from ..models.user import User, UserFact
 from ..schema.memory import (
     EdgeIn,
     EdgeOut,
@@ -34,6 +34,9 @@ from ..schema.memory import (
 
 logger = logging.getLogger("app.crud.memory_store")
 settings = get_settings()
+
+# Priority order for categorized facts used to build resolver hints.
+FACT_CATEGORY_PRIORITY = ("visual_descriptor", "affiliation", "hobby")
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -68,20 +71,19 @@ class MemoryStore:
     """Typed, deterministic memory access layer over the project schema."""
 
     def __init__(self, db_url: str | None = None, owner_user_id: UUID | None = None) -> None:
-        """Create a store bound to an optional database URL and owner user.
-
-        Args:
-            db_url: Override for the configured database URL.
-            owner_user_id: Existing user UUID that owns all memory records created
-                through this store. When omitted, the store will reuse the first
-                available user or create a default owner on first write.
-        """
+        """Create a store bound to an optional database URL and owner user."""
 
         self._db_url = db_url or settings.database_url
         self._owner_user_id = owner_user_id
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
-        logger.info("MemoryStore created (db_url=%s)", self._db_url)
+        logger.info("MemoryStore created (db_url=%s, owner=%s)", self._db_url, owner_user_id)
+
+    @property
+    def owner_user_id(self) -> UUID | None:
+        """Return the active owner UUID, or ``None`` until one is resolved/created."""
+
+        return self._owner_user_id
 
     def initialize(self, create_schema: bool = True) -> None:
         """Initialize the SQLAlchemy engine and create tables when requested."""
@@ -117,25 +119,16 @@ class MemoryStore:
     def upsert_person(
         self,
         name: str,
-        aliases: list[str],
+        aliases: Optional[list[str]] = None,
         face_key: Optional[str] = None,
         voice_key: Optional[str] = None,
         persona90: Optional[list[float]] = None,
     ) -> PersonOut:
-        """Create or update an interlocutor for the current owner.
-
-        The lookup is case-insensitive on the person's display name within the
-        active owner scope. When a matching person already exists, the supplied
-        keys and persona vector are updated and the alias collection is replaced
-        with the provided set.
-
-        Returns:
-            The normalized stored person record.
-        """
+        """Create or update an interlocutor for the current owner."""
 
         data = PersonIn(
             name=name,
-            aliases=aliases,
+            aliases=aliases or [],
             face_key=face_key,
             voice_key=voice_key,
             persona90=persona90 or [],
@@ -190,34 +183,63 @@ class MemoryStore:
             except IntegrityError as exc:
                 raise ValueError(f"Unable to upsert person '{name}': {exc.orig}") from exc
 
-    def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
-        """Resolve a person by display name or alias for the current owner.
+    def list_people(self) -> list[Person]:
+        """Return all people for the current owner."""
 
-        The match is case-insensitive and restricted to people owned by the
-        store's active user. Blank input returns ``None`` instead of raising.
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                people = list(
+                    session.scalars(
+                        select(Person).where(Person.user_id == owner.id).order_by(Person.created_at.asc())
+                    ).all()
+                )
+            return people
 
-        Returns:
-            The matching person record, or ``None`` when no match exists.
-        """
+    def resolve_person_by_name(self, text: str) -> Optional[PersonOut]:
+        """Resolve a person by display name only for the current owner."""
 
         cleaned = text.strip()
         if not cleaned:
             return None
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
-            person = session.scalar(
-                select(Person)
-                .outerjoin(Alias, Alias.person_id == Person.id)
-                .where(
-                    Person.user_id == owner.id,
-                    or_(
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                person = session.scalar(
+                    select(Person).where(
+                        Person.user_id == owner.id,
                         func.lower(func.coalesce(Person.display_name, "")) == cleaned.lower(),
-                        func.lower(Alias.alias) == cleaned.lower(),
                     )
                 )
-                .limit(1)
-            )
+
+            if person is None:
+                return None
+
+            return self._load_person(session, person.id)
+
+    def resolve_person_by_name_or_alias(self, text: str) -> Optional[PersonOut]:
+        """Resolve a person by display name or alias for the current owner."""
+
+        cleaned = text.strip()
+        if not cleaned:
+            return None
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                person = session.scalar(
+                    select(Person)
+                    .outerjoin(Alias, Alias.person_id == Person.id)
+                    .where(
+                        Person.user_id == owner.id,
+                        or_(
+                            func.lower(func.coalesce(Person.display_name, "")) == cleaned.lower(),
+                            func.lower(Alias.alias) == cleaned.lower(),
+                        ),
+                    )
+                    .limit(1)
+                )
 
             if person is None:
                 logger.debug("resolve_person: no match for '%s'", cleaned)
@@ -234,15 +256,7 @@ class MemoryStore:
         summary: str = "",
         participants: Optional[list[UUID]] = None,
     ) -> UUID:
-        """Insert a conversation episode and its participant links.
-
-        The first participant becomes the primary ``Episode.person_id`` so the
-        episode remains compatible with the main schema, while every supplied
-        participant is also written to ``EpisodeParticipant``.
-
-        Returns:
-            The UUID of the created episode row.
-        """
+        """Insert a conversation episode and its participant links."""
 
         data = EpisodeIn(
             time_start=time_start,
@@ -271,18 +285,12 @@ class MemoryStore:
                 session.add(episode)
                 session.flush()
 
-                for person_id in ordered_participants:
-                    session.add(EpisodeParticipant(episode_id=episode.id, person_id=person_id))
+                for participant_id in ordered_participants:
+                    session.add(EpisodeParticipant(episode_id=episode.id, person_id=participant_id))
 
                 episode_id = episode.id
 
-            logger.debug(
-                "Wrote episode id=%s (%s -> %s, %d participants)",
-                episode_id,
-                data.time_start.isoformat(),
-                data.time_end.isoformat(),
-                len(ordered_participants),
-            )
+            logger.debug("Wrote episode id=%s", episode_id)
             return episode_id
 
     def write_fact(
@@ -298,12 +306,10 @@ class MemoryStore:
         source: Optional[UUID] = None,
         embedding: Optional[list[float]] = None,
     ) -> UUID:
-        """Input: the person ID, fact text, optional category/source/embedding, and optional confidence/time range.
+        """Persist a structured fact about a person.
 
-        Output: the UUID of the saved fact row.
-
-        ``source`` is the episode UUID where the fact most recently came from.
-        ``episode_id`` is still accepted as an older alias for the same idea.
+        ``source`` is the canonical episode UUID field. ``episode_id`` remains
+        accepted as a backward-compatible alias.
         """
 
         if source is not None and episode_id is not None and source != episode_id:
@@ -330,8 +336,8 @@ class MemoryStore:
                 row = PersonFact(
                     person_id=data.person_id,
                     fact_category=data.fact_category,
-                    fact_text=data.fact_text,
                     source=data.source,
+                    fact_text=data.fact_text,
                     embedding=data.embedding,
                     confidence=_decimal(data.confidence),
                     valid_from=data.valid_from,
@@ -351,14 +357,7 @@ class MemoryStore:
         confidence: float = 1.0,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Persist a preference remembered about a person.
-
-        Preferences are owner-scoped through the referenced person and may be
-        associated with an originating episode.
-
-        Returns:
-            The UUID of the created preference row.
-        """
+        """Persist a preference remembered about a person."""
 
         data = PrefIn(
             person_id=person_id,
@@ -394,14 +393,7 @@ class MemoryStore:
         episode_time_end: Optional[datetime] = None,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Persist a summary slice for a person.
-
-        This stores the human-readable summary text plus optional time bounds
-        describing the source interaction window and an optional backing episode.
-
-        Returns:
-            The UUID of the created summary row.
-        """
+        """Persist a summary slice for a person."""
 
         data = SummaryIn(
             person_id=person_id,
@@ -439,15 +431,7 @@ class MemoryStore:
         confidence: float = 1.0,
         episode_id: Optional[UUID] = None,
     ) -> UUID:
-        """Create or update a directed relationship between two people.
-
-        Edges are unique by ``(src_id, relation, dst_id)``. Rewriting an
-        existing edge updates its confidence and optional episode reference
-        instead of creating a duplicate row.
-
-        Returns:
-            The UUID of the inserted or updated edge row.
-        """
+        """Create or update a directed relationship between two people."""
 
         data = EdgeIn(
             src_id=src_id,
@@ -498,42 +482,71 @@ class MemoryStore:
             )
             return edge_id
 
-    def get_profile_context(self, person_id: UUID) -> ProfileContext:
-        """Input: one person ID.
-
-        Output: a ``ProfileContext`` with all stored facts, preferences,
-        summaries, outgoing edges, and persona values for that person.
-
-        Items are returned newest-first inside each category.
-        """
+    def get_user_facts(self) -> list[str]:
+        """Return all fact texts stored for the current owner user."""
 
         with self.Session() as session:
-            owner = self._get_or_create_owner(session)
-            person = self._get_person(session, person_id, owner.id)
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                rows = session.scalars(
+                    select(UserFact.fact_text)
+                    .where(UserFact.user_id == owner.id)
+                    .order_by(UserFact.created_at.asc())
+                ).all()
+            return list(rows)
 
-            facts_rows = session.scalars(
-                select(PersonFact)
-                .where(PersonFact.person_id == person_id)
-                .order_by(PersonFact.created_at.desc())
-            ).all()
+    def get_disambiguation_hints(self, person_id: UUID) -> dict[str, list[str]]:
+        """Return categorized fact texts used to disambiguate same-name people."""
 
-            prefs_rows = session.scalars(
-                select(Pref).where(Pref.person_id == person_id).order_by(Pref.created_at.desc())
-            ).all()
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, person_id, owner.id)
+                rows = session.execute(
+                    select(PersonFact.fact_category, PersonFact.fact_text)
+                    .where(PersonFact.person_id == person_id)
+                    .order_by(PersonFact.created_at.desc())
+                ).all()
 
-            summaries_rows = session.scalars(
-                select(Summary)
-                .where(Summary.person_id == person_id)
-                .order_by(Summary.created_at.desc())
-            ).all()
+            hints: dict[str, list[str]] = {}
+            for category in FACT_CATEGORY_PRIORITY:
+                texts = [text for fact_category, text in rows if fact_category == category]
+                if texts:
+                    hints[category] = texts
 
-            dst_person = aliased(Person)
-            edge_rows = session.execute(
-                select(Edge, func.coalesce(dst_person.display_name, dst_person.first_name))
-                .join(dst_person, dst_person.id == Edge.dst_id)
-                .where(Edge.src_id == person_id)
-                .order_by(Edge.created_at.desc())
-            ).all()
+            return hints
+
+    def get_profile_context(self, person_id: UUID) -> ProfileContext:
+        """Return the stored profile bundle for one person."""
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                person = self._get_person(session, person_id, owner.id)
+
+                facts_rows = session.scalars(
+                    select(PersonFact)
+                    .where(PersonFact.person_id == person_id)
+                    .order_by(PersonFact.created_at.desc())
+                ).all()
+
+                prefs_rows = session.scalars(
+                    select(Pref).where(Pref.person_id == person_id).order_by(Pref.created_at.desc())
+                ).all()
+
+                summaries_rows = session.scalars(
+                    select(Summary)
+                    .where(Summary.person_id == person_id)
+                    .order_by(Summary.created_at.desc())
+                ).all()
+
+                dst_person = aliased(Person)
+                edge_rows = session.execute(
+                    select(Edge, func.coalesce(dst_person.display_name, dst_person.first_name))
+                    .join(dst_person, dst_person.id == Edge.dst_id)
+                    .where(Edge.src_id == person_id)
+                    .order_by(Edge.created_at.desc())
+                ).all()
 
             facts = [
                 FactOut(
@@ -586,15 +599,6 @@ class MemoryStore:
                 )
                 for edge, dst_name in edge_rows
             ]
-
-            logger.debug(
-                "Profile context for person=%s: %d facts, %d prefs, %d summaries, %d edges",
-                person_id,
-                len(facts),
-                len(prefs),
-                len(summaries),
-                len(edges),
-            )
 
             return ProfileContext(
                 facts=facts,

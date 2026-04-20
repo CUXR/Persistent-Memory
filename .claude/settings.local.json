@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/CUXR/Persistent-Memory/backend -not -path */__pycache__/* -not -path */.pytest_cache/* -type f)",
+      "Bash(xargs grep:*)",
+      "Bash(python -m pytest tests/test_conversation_ingestion.py tests/test_memory_store.py -v --tb=short)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import scripts.live_ingestion\")"
+    ]
+  }
+}
