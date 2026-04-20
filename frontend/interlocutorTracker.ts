@@ -2,14 +2,12 @@
 //
 // Mock interlocutor tracker for EgoMem.
 //
-// - Loads wearer_person_id from wearer_state on startup
 // - Polls every 2s for a (mock) interlocutor identity
 // - Debounces identity switches (requires N consecutive polls; default 2)
 // - On confirmed change, refreshes active Level-1 interlocutor context via get_profile_context(person_id)
 // - Emits `interlocutor_changed` event
 //
 // Notes:
-// - Wearer identity is fixed; only the interlocutor is tracked.
 // - Mock identity comes from an in-memory timeline (replace later with AV recognition).
 
 import { EventEmitter } from "events";
@@ -18,12 +16,6 @@ import { EventEmitter } from "events";
 export type Level1InterlocutorContext = unknown;
 
 export type GetProfileContextFn = (personId: string) => Promise<Level1InterlocutorContext>;
-
-/** Minimal wearer_state contract. */
-/** TODO: Need to implement the wearer state so the polling can actually grab this info */
-export type WearerState = { wearer_person_id: string };
-
-export type WearerStateLoader = () => Promise<WearerState> | WearerState;
 
 export type InterlocutorChangedEvent = {
   previous_person_id: string | null;
@@ -70,44 +62,11 @@ export type InterlocutorTrackerOptions = {
   mockStream?: MockInterlocutorStream;
 
   // Dependency injection (recommended for tests)
-  // TODO: Need to implement the getProfileContext function so that the tracker can actually fetch the profile context for the interlocutor
   getProfileContext?: GetProfileContextFn;
-  loadWearerState?: WearerStateLoader;
 };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Attempts to load wearer_state + get_profile_context from local modules if not provided.
- * This avoids hard-coding your repo layout, while still “just working” in many setups.
- */
-async function defaultLoadWearerState(): Promise<WearerState> {
-  // Try common patterns:
-  // 1) exported const wearer_state
-  // 2) exported function getWearerState()
-  // 3) JSON file wearer_state.json
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require("./wearer_state");
-    if (mod?.wearer_state?.wearer_person_id) return mod.wearer_state as WearerState;
-    if (typeof mod?.getWearerState === "function") return await mod.getWearerState();
-  } catch {
-    // ignore
-  }
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const json = require("./wearer_state.json");
-    if (json?.wearer_person_id) return json as WearerState;
-  } catch {
-    // ignore
-  }
-
-  throw new Error(
-    "Failed to load wearer_state. Provide options.loadWearerState or ensure ./wearer_state(.ts) or ./wearer_state.json exists."
-  );
 }
 
 function defaultGetProfileContext(): GetProfileContextFn {
@@ -126,8 +85,6 @@ function defaultGetProfileContext(): GetProfileContextFn {
 }
 
 export class InterlocutorTracker extends EventEmitter {
-  public wearer_person_id: string | null = null;
-
   /** The interlocutor we consider currently active (debounced + applied). */
   public activeInterlocutorPersonId: string | null = null;
 
@@ -139,7 +96,6 @@ export class InterlocutorTracker extends EventEmitter {
   private readonly mockStream: MockInterlocutorStream;
 
   private readonly getProfileContext: GetProfileContextFn;
-  private readonly loadWearerState: WearerStateLoader;
 
   private startedAtMs: number = 0;
   private running = false;
@@ -173,31 +129,24 @@ export class InterlocutorTracker extends EventEmitter {
       );
 
     this.getProfileContext = options.getProfileContext ?? defaultGetProfileContext();
-    this.loadWearerState = options.loadWearerState ?? defaultLoadWearerState;
   }
 
   /**
    * Startup:
-   * - load wearer_person_id once
    * - begin polling loop (continuous)
    */
   async start(): Promise<void> {
     if (this.running) return;
-
-    const wearerState = await Promise.resolve(this.loadWearerState());
-    if (!wearerState?.wearer_person_id) {
-      throw new Error("wearer_state missing wearer_person_id");
-    }
-    this.wearer_person_id = wearerState.wearer_person_id;
 
     this.running = true;
     this.startedAtMs = Date.now();
 
     // Kick off loop without awaiting it (but ensure it can't throw unhandled).
     void this.pollLoop().catch((err) => {
-      // No console errors per acceptance criteria: re-emit so caller can handle/log as desired.
+      // No console errors per acceptance criteria: surface if listeners are present.
+      // This should be rare because per-tick errors are handled inside pollLoop.
       this.running = false;
-      this.emit("error", err);
+      this.safeEmitError(err instanceof Error ? err : new Error(String(err)));
     });
   }
 
@@ -295,8 +244,18 @@ export class InterlocutorTracker extends EventEmitter {
   /** Continuous polling loop: runs until stop() sets running=false. */
   private async pollLoop(): Promise<void> {
     while (this.running) {
-      await this.pollOnce();
+      try {
+        await this.pollOnce();
+      } catch (err) {
+        this.safeEmitError(err instanceof Error ? err : new Error(String(err)));
+      }
       await sleep(this.pollIntervalMs);
+    }
+  }
+
+  private safeEmitError(err: Error): void {
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", err);
     }
   }
 

@@ -31,7 +31,6 @@ from ..schema.memory import (
 )
 
 logger = logging.getLogger("app.crud.memory_store")
-settings = get_settings()
 
 # Priority order for fact categories used in disambiguation
 FACT_CATEGORY_PRIORITY = ("visual_descriptor", "affiliation", "hobby")
@@ -78,8 +77,13 @@ class MemoryStore:
                 responsible for ensuring this user exists in the database.
         """
 
-        self._db_url = db_url or settings.database_url
+        self._db_url = db_url or get_settings().database_url
         self._owner_user_id = owner_user_id
+        # Track whether the owner UUID was explicitly supplied by the caller.
+        # When True, a missing owner is always a programming error and raises.
+        # When False, a stale cache (e.g. from a rolled-back read-only session)
+        # should silently recover by re-discovering or re-creating the owner.
+        self._explicit_owner: bool = owner_user_id is not None
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
         logger.info("MemoryStore created (db_url=%s, owner=%s)", self._db_url, owner_user_id)

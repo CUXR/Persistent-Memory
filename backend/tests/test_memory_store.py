@@ -100,6 +100,24 @@ class TestUpsertPerson:
         with pytest.raises(ValueError):
             store.upsert_person(name="")
 
+    def test_resolve_by_face_key(self, store, emily):
+        found = store.resolve_person_by_face_key("face_emily_001")
+        assert found is not None
+        assert found.id == emily.id
+
+    def test_resolve_unknown_face_key_returns_none(self, store, emily):
+        assert store.resolve_person_by_face_key("face_missing") is None
+
+
+class TestCreatePerson:
+    def test_create_person_does_not_merge_by_name(self, store):
+        first = store.create_person(name="Jordan Lee", aliases=[], face_key="face_1")
+        second = store.create_person(name="Jordan Lee", aliases=[], face_key="face_2")
+
+        assert first.id != second.id
+        assert store.resolve_person_by_face_key("face_1").id == first.id
+        assert store.resolve_person_by_face_key("face_2").id == second.id
+
 
 class TestWriteEpisode:
     def test_write_episode_with_participants(self, store, emily, john):
