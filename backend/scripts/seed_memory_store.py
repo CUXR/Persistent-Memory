@@ -35,7 +35,13 @@ def main() -> None:
             summary="Conversation about hobbies and weekend plans.",
             participants=[emily.id, john.id],
         )
-        store.write_fact(emily.id, "likes swimming", confidence=0.9, episode_id=episode_id)
+        store.write_fact(
+            emily.id,
+            "likes swimming",
+            fact_category="hobby",
+            confidence=0.9,
+            source=episode_id,
+        )
         store.write_pref(emily.id, "energy: high", confidence=0.8, episode_id=episode_id)
         store.write_summary(
             emily.id,

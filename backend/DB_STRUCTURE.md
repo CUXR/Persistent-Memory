@@ -19,9 +19,10 @@
 ### PersonFact
 - `id` - UUID primary key
 - `person_id` - links to `Person`
+- `fact_category` - normalized category for the fact (for example `visual_descriptor`, `affiliation`, `hobby`)
 - `fact_text` - remembered fact about the person
-- `source` - optional source label for where the fact came from
-- `source_episode_id` - optional link to the `Episode` where the fact was learned
+- `source` - optional link to the `Episode` where the fact was learned
+- `embedding` - optional retrieval embedding for RAG-style fact lookup
 - `confidence` - optional confidence score for the fact
 - `created_at` - timestamp when the fact was created
 - `updated_at` - timestamp when the fact was last updated

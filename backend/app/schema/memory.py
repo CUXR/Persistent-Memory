@@ -25,6 +25,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..core.config import get_settings
+
+settings = get_settings()
+
+_FACT_CATEGORIES = {
+    "general",
+    "visual_descriptor",
+    "affiliation",
+    "hobby",
+    "biographical",
+    "relationship",
+    "other",
+}
+
 
 # ── Shared validators ────────────────────────────────────────
 
@@ -40,6 +54,29 @@ def _check_persona90(v: list[float]) -> list[float]:
     if len(v) != 0 and len(v) != 90:
         raise ValueError(f"persona90 must have 0 or 90 elements, got {len(v)}")
     return v
+
+
+def _check_retrieval_embedding(v: list[float] | None) -> list[float] | None:
+    """Fact embedding must match the configured retrieval dimension when present."""
+    if v is None:
+        return None
+    if len(v) != settings.retrieval_embedding_dimension:
+        raise ValueError(
+            "embedding must have "
+            f"{settings.retrieval_embedding_dimension} elements, got {len(v)}"
+        )
+    return v
+
+
+def _normalize_fact_category(v: str) -> str:
+    """Normalize and validate fact_category."""
+    normalized = v.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized == "affilation":
+        normalized = "affiliation"
+    if normalized not in _FACT_CATEGORIES:
+        allowed = ", ".join(sorted(_FACT_CATEGORIES))
+        raise ValueError(f"fact_category must be one of: {allowed}")
+    return normalized
 
 
 #input schemas
@@ -85,18 +122,34 @@ class EpisodeIn(BaseModel):
 
 
 class FactIn(BaseModel):
-    """Input for write_fact()."""
+    """Input shape for saving one fact.
+
+    Takes a person ID, fact text, fact category, optional source episode UUID,
+    optional embedding vector, confidence, and optional validity dates.
+    """
     person_id: UUID
+    fact_category: str = "general"
     fact_text: str = Field(..., min_length=1)
     confidence: float = 1.0
-    episode_id: Optional[UUID] = None
+    source: Optional[UUID] = None
+    embedding: list[float] | None = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
+
+    @field_validator("fact_category")
+    @classmethod
+    def validate_fact_category(cls, v: str) -> str:
+        return _normalize_fact_category(v)
 
     @field_validator("confidence")
     @classmethod
     def validate_confidence(cls, v: float) -> float:
         return _check_confidence(v)
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding(cls, v: list[float] | None) -> list[float] | None:
+        return _check_retrieval_embedding(v)
 
     @field_validator("valid_to")
     @classmethod
@@ -172,13 +225,31 @@ class PersonOut(BaseModel):
 
 
 class FactOut(BaseModel):
+    """Output shape for one stored fact.
+
+    Returns the saved fact text plus its category, source episode UUID,
+    optional embedding, confidence, and timestamps.
+    """
     id: UUID
+    fact_category: str
     fact_text: str
     confidence: float
-    episode_id: Optional[UUID]
+    source: Optional[UUID]
+    embedding: list[float] | None = None
+    episode_id: Optional[UUID] = None
     valid_from: Optional[str]
     valid_to: Optional[str]
     created_at: str
+
+    @field_validator("fact_category")
+    @classmethod
+    def validate_fact_category(cls, v: str) -> str:
+        return _normalize_fact_category(v)
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding(cls, v: list[float] | None) -> list[float] | None:
+        return _check_retrieval_embedding(v)
 
 
 class PrefOut(BaseModel):
@@ -210,18 +281,26 @@ class EdgeOut(BaseModel):
 
 class ProfileContext(BaseModel):
     """
-    The composite view returned by get_profile_context().
+    Output shape returned by ``get_profile_context(person_id)``.
 
-    This is the Python equivalent of the Level-1 MemChunk content
-    from the paper. When the retrieval process identifies a user,
-    it calls get_profile_context(person_id) and the result gets
-    serialized into the text channel of the MemChunk (Eq. 2: p_t).
-
-    Shape matches the issue spec:
-        { facts, prefs, summaries, edges_from, persona90 }
+    It contains all stored profile information for one person:
+    facts, preferences, summaries, outgoing edges, and persona values.
     """
     facts: list[FactOut] = Field(default_factory=list)
     prefs: list[PrefOut] = Field(default_factory=list)
     summaries: list[SummaryOut] = Field(default_factory=list)
     edges_from: list[EdgeOut] = Field(default_factory=list)
     persona90: list[float] = Field(default_factory=list)
+
+
+class RetrievedPersonContext(BaseModel):
+    """Output shape returned by ``retrieve_person_context(person_id, query)``.
+
+    It contains the relevant facts, summaries, and edges selected for the
+    user's question about one person.
+    """
+
+    person_id: UUID
+    facts: list[FactOut] = Field(default_factory=list)
+    summaries: list[SummaryOut] = Field(default_factory=list)
+    edges: list[EdgeOut] = Field(default_factory=list)

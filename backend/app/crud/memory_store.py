@@ -293,21 +293,30 @@ class MemoryStore:
         episode_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
+        *,
+        fact_category: str = "general",
+        source: Optional[UUID] = None,
+        embedding: Optional[list[float]] = None,
     ) -> UUID:
-        """Persist a structured fact about a person.
+        """Input: the person ID, fact text, optional category/source/embedding, and optional confidence/time range.
 
-        The person must belong to the current owner. When ``episode_id`` is
-        provided, the fact is linked back to the episode where it was learned.
+        Output: the UUID of the saved fact row.
 
-        Returns:
-            The UUID of the created fact row.
+        ``source`` is the episode UUID where the fact most recently came from.
+        ``episode_id`` is still accepted as an older alias for the same idea.
         """
 
+        if source is not None and episode_id is not None and source != episode_id:
+            raise ValueError("write_fact received conflicting source and episode_id values")
+
+        source_id = source or episode_id
         data = FactIn(
             person_id=person_id,
+            fact_category=fact_category,
             fact_text=fact_text,
             confidence=confidence,
-            episode_id=episode_id,
+            source=source_id,
+            embedding=embedding,
             valid_from=valid_from,
             valid_to=valid_to,
         )
@@ -316,13 +325,15 @@ class MemoryStore:
             with session.begin():
                 owner = self._get_or_create_owner(session)
                 self._assert_person_exists(session, data.person_id, owner.id)
-                self._assert_episode_exists(session, data.episode_id, owner.id)
+                self._assert_episode_exists(session, data.source, owner.id)
 
                 row = PersonFact(
                     person_id=data.person_id,
+                    fact_category=data.fact_category,
                     fact_text=data.fact_text,
+                    source=data.source,
+                    embedding=data.embedding,
                     confidence=_decimal(data.confidence),
-                    source_episode_id=data.episode_id,
                     valid_from=data.valid_from,
                     valid_to=data.valid_to,
                 )
@@ -488,14 +499,12 @@ class MemoryStore:
             return edge_id
 
     def get_profile_context(self, person_id: UUID) -> ProfileContext:
-        """Return the issue-specified profile context bundle for one person.
+        """Input: one person ID.
 
-        The returned structure contains facts, preferences, summaries, outgoing
-        edges, and the stored ``persona90`` vector ordered newest-first within
-        each collection.
+        Output: a ``ProfileContext`` with all stored facts, preferences,
+        summaries, outgoing edges, and persona values for that person.
 
-        Returns:
-            A ``ProfileContext`` ready for deterministic retrieval use.
+        Items are returned newest-first inside each category.
         """
 
         with self.Session() as session:
@@ -529,9 +538,12 @@ class MemoryStore:
             facts = [
                 FactOut(
                     id=row.id,
+                    fact_category=row.fact_category,
                     fact_text=row.fact_text,
                     confidence=_float(row.confidence),
-                    episode_id=row.source_episode_id,
+                    source=row.source,
+                    embedding=row.embedding,
+                    episode_id=row.source,
                     valid_from=_iso(row.valid_from),
                     valid_to=_iso(row.valid_to),
                     created_at=_iso(row.created_at) or "",
