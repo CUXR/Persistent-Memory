@@ -4,26 +4,61 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import get_settings
+from app.core.database import Base
 from app.crud.memory_store import MemoryStore
+from app.models.user import User
+
+
+def _get_or_create_seed_owner(db_url: str):
+    """Return the first user's UUID, creating a seed user if none exists."""
+
+    engine = create_engine(db_url, future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    with Session() as session:
+        owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
+        if owner is None:
+            with session.begin():
+                owner = User(
+                    first_name="Seed",
+                    last_name="Owner",
+                    display_name="Seed Owner",
+                    username="seed-owner",
+                )
+                session.add(owner)
+                session.flush()
+                print(f"Created seed owner user id={owner.id}")
+        else:
+            print(f"Using existing owner user id={owner.id}")
+        owner_id = owner.id
+
+    engine.dispose()
+    return owner_id
 
 
 def main() -> None:
     """Seed the configured database with a minimal memory dataset."""
 
-    store = MemoryStore()
-    store.initialize()
+    settings = get_settings()
+    owner_id = _get_or_create_seed_owner(settings.database_url)
+
+    store = MemoryStore(owner_user_id=owner_id)
+    store.initialize(create_schema=False)
 
     try:
         emily = store.upsert_person(
             name="Emily Chen",
-            aliases=["Em", "Dr. Chen"],
             face_key="face_emily_demo",
             voice_key="voice_emily_demo",
             persona90=[0.5] * 90,
         )
         john = store.upsert_person(
             name="John Rivera",
-            aliases=["Johnny"],
             face_key="face_john_demo",
         )
 
