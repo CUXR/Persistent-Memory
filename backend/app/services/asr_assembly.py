@@ -18,7 +18,7 @@ import re
 from app.schema.asr import Dialog, DialogTurn, RawTranscription
 
 # Whisper's no_speech_prob above this threshold => treat segment as silence
-# and drop it. Matches the locked decision in ISSUES.md #24.
+# and drop it.
 SILENCE_THRESHOLD = 0.6
 
 # Consecutive same-speaker segments within this gap (seconds) are merged into
