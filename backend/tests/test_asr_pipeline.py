@@ -19,6 +19,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.schema.asr import RawTranscription, SpeechSegment
 from app.services.asr import transcribe_segments
+from app.services.asr_engine import WhisperEngine
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -206,6 +207,74 @@ class TestTranscribeSegments:
         assert len(dialog.turns) == 1
         # Low confidence surfaces through asr_confidence; segment is not dropped.
         assert dialog.turns[0].asr_confidence == pytest.approx(math.exp(-2.5))
+
+
+# ── End-to-end with real Whisper (slow, optional) ────────────
+
+
+@pytest.mark.slow
+class TestPipelineEndToEnd:
+    """End-to-end smoke through the full pipeline: real WhisperEngine,
+    real soundfile-loaded audio, real assembly.
+
+    Skipped by default; run with `pytest --runslow`. Requires:
+      - faster-whisper installed
+      - ~75 MB of `tiny` model weights on first run
+
+    What this test catches that the stubbed pipeline tests do not:
+      - The orchestrator + engine + assembly modules actually compose
+      - WhisperEngine outputs are shaped the way RawTranscription expects
+      - File loading via soundfile produces arrays Whisper accepts
+      - The audio cache is exercised by the orchestrator's per-segment loop
+
+    What this test does NOT validate (synthetic silence, not real speech):
+      - Transcription accuracy on actual conversation audio
+      - Hallucination behavior on noisy non-speech
+      For those, exercise the pipeline manually with a real recording.
+    """
+
+    def test_pipeline_runs_end_to_end_on_silent_segments(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
+        # One conversation file, three segments slicing into it, with a
+        # speaker change in the middle to exercise both the merge and
+        # the boundary-split paths.
+        audio_path = write_synthetic_wav(
+            tmp_path / "conv.wav", duration_seconds=4.0
+        )
+        segments = [
+            SpeechSegment(
+                start_time=0.0,
+                end_time=1.5,
+                speaker_label="user",
+                audio_path=audio_path,
+            ),
+            SpeechSegment(
+                start_time=1.5,
+                end_time=2.5,
+                speaker_label="interlocutor",
+                audio_path=audio_path,
+            ),
+            SpeechSegment(
+                start_time=2.5,
+                end_time=4.0,
+                speaker_label="user",
+                audio_path=audio_path,
+            ),
+        ]
+
+        engine = WhisperEngine(
+            model_size="tiny", compute_type="int8", device="cpu"
+        )
+        dialog = transcribe_segments(segments, engine)
+
+        # Pure silence — assembly's filter_empty_or_silent should drop
+        # every transcription, leaving an empty Dialog.
+        assert dialog.turns == []
+        # Engine cache proves the orchestrator actually reached the engine
+        # and the engine actually loaded the file (not bypassed by an
+        # accidental short-circuit somewhere in the pipeline).
+        assert str(audio_path) in engine._audio_cache
 
 
 if __name__ == "__main__":

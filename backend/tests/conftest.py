@@ -6,9 +6,12 @@ collection.  These values are test-only stubs; the MemoryStore tests always
 pass their own ``db_url`` directly, and LLM calls are fully mocked.
 """
 
+from pathlib import Path
 import os
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 # Provide the required settings fields so pydantic-settings validates cleanly.
 # Tests always override these at the MemoryStore/LLMClient constructor level,
@@ -42,3 +45,37 @@ def pytest_collection_modifyitems(
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+
+# ── Shared audio fixture for ASR tests ───────────────────────
+
+
+@pytest.fixture
+def write_synthetic_wav():
+    """Return a callable that writes a mono float32 WAV at the ASR sample rate.
+
+    Used by ASR engine and pipeline tests to avoid checking binary fixtures
+    into the repo. Defaults to silence; pass `frequency` for a sine tone.
+    Pass `channels=2` to test the stereo-collapse path.
+    """
+
+    def _writer(
+        path: Path,
+        duration_seconds: float = 1.0,
+        *,
+        frequency: float | None = None,
+        sample_rate: int = 16_000,
+        channels: int = 1,
+    ) -> Path:
+        n_samples = int(duration_seconds * sample_rate)
+        if frequency is None:
+            samples = np.zeros(n_samples, dtype=np.float32)
+        else:
+            t = np.arange(n_samples, dtype=np.float32) / sample_rate
+            samples = (0.2 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+        if channels > 1:
+            samples = np.stack([samples] * channels, axis=1)
+        sf.write(str(path), samples, sample_rate)
+        return path
+
+    return _writer

@@ -21,7 +21,6 @@ import sys
 
 import numpy as np
 import pytest
-import soundfile as sf
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -49,27 +48,8 @@ class _FakeWhisperSegment:
     no_speech_prob: float
 
 
-def _write_synthetic_wav(
-    path: Path,
-    duration_seconds: float = 1.0,
-    *,
-    frequency: float | None = None,
-    sample_rate: int = SAMPLE_RATE,
-    channels: int = 1,
-) -> Path:
-    """Write a synthetic mono float32 WAV. Silence by default; a sine tone
-    when `frequency` is given. Returns the path for chaining.
-    """
-    n_samples = int(duration_seconds * sample_rate)
-    if frequency is None:
-        samples = np.zeros(n_samples, dtype=np.float32)
-    else:
-        t = np.arange(n_samples, dtype=np.float32) / sample_rate
-        samples = (0.2 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
-    if channels > 1:
-        samples = np.stack([samples] * channels, axis=1)
-    sf.write(str(path), samples, sample_rate)
-    return path
+# `write_synthetic_wav` fixture lives in conftest.py and is shared with
+# test_asr_pipeline.py.
 
 
 # ── Static logic: _aggregate ─────────────────────────────────
@@ -150,24 +130,28 @@ class TestSlice:
 
 
 class TestLoadAudio:
-    def test_loads_mono_16khz_wav(self, tmp_path: Path) -> None:
-        path = _write_synthetic_wav(tmp_path / "speech.wav", duration_seconds=2.0)
+    def test_loads_mono_16khz_wav(self, tmp_path: Path, write_synthetic_wav) -> None:
+        path = write_synthetic_wav(tmp_path / "speech.wav", duration_seconds=2.0)
         engine = WhisperEngine()
         samples = engine._load_audio(path)
         assert samples.dtype == np.float32
         assert samples.ndim == 1
         assert samples.shape == (int(2.0 * SAMPLE_RATE),)
 
-    def test_rejects_wrong_sample_rate(self, tmp_path: Path) -> None:
-        path = _write_synthetic_wav(
+    def test_rejects_wrong_sample_rate(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
+        path = write_synthetic_wav(
             tmp_path / "wrong_sr.wav", duration_seconds=0.5, sample_rate=8000
         )
         engine = WhisperEngine()
         with pytest.raises(ValueError, match="sample rate"):
             engine._load_audio(path)
 
-    def test_collapses_stereo_to_mono(self, tmp_path: Path) -> None:
-        path = _write_synthetic_wav(
+    def test_collapses_stereo_to_mono(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
+        path = write_synthetic_wav(
             tmp_path / "stereo.wav", duration_seconds=0.5, channels=2
         )
         engine = WhisperEngine()
@@ -175,19 +159,23 @@ class TestLoadAudio:
         assert samples.ndim == 1
         assert samples.shape == (int(0.5 * SAMPLE_RATE),)
 
-    def test_caches_repeat_loads(self, tmp_path: Path) -> None:
-        path = _write_synthetic_wav(tmp_path / "cached.wav", duration_seconds=0.5)
+    def test_caches_repeat_loads(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
+        path = write_synthetic_wav(tmp_path / "cached.wav", duration_seconds=0.5)
         engine = WhisperEngine()
         first = engine._load_audio(path)
         second = engine._load_audio(path)
         # Cache returns the same array object, not a fresh load.
         assert first is second
 
-    def test_evicts_oldest_when_cache_full(self, tmp_path: Path) -> None:
+    def test_evicts_oldest_when_cache_full(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
         engine = WhisperEngine(audio_cache_size=2)
-        a = _write_synthetic_wav(tmp_path / "a.wav", duration_seconds=0.5)
-        b = _write_synthetic_wav(tmp_path / "b.wav", duration_seconds=0.5)
-        c = _write_synthetic_wav(tmp_path / "c.wav", duration_seconds=0.5)
+        a = write_synthetic_wav(tmp_path / "a.wav", duration_seconds=0.5)
+        b = write_synthetic_wav(tmp_path / "b.wav", duration_seconds=0.5)
+        c = write_synthetic_wav(tmp_path / "c.wav", duration_seconds=0.5)
         engine._load_audio(a)
         engine._load_audio(b)
         # Loading a third file evicts the oldest (a).
@@ -196,11 +184,13 @@ class TestLoadAudio:
         assert str(b) in engine._audio_cache
         assert str(c) in engine._audio_cache
 
-    def test_recently_used_entries_survive_eviction(self, tmp_path: Path) -> None:
+    def test_recently_used_entries_survive_eviction(
+        self, tmp_path: Path, write_synthetic_wav
+    ) -> None:
         engine = WhisperEngine(audio_cache_size=2)
-        a = _write_synthetic_wav(tmp_path / "a.wav", duration_seconds=0.5)
-        b = _write_synthetic_wav(tmp_path / "b.wav", duration_seconds=0.5)
-        c = _write_synthetic_wav(tmp_path / "c.wav", duration_seconds=0.5)
+        a = write_synthetic_wav(tmp_path / "a.wav", duration_seconds=0.5)
+        b = write_synthetic_wav(tmp_path / "b.wav", duration_seconds=0.5)
+        c = write_synthetic_wav(tmp_path / "c.wav", duration_seconds=0.5)
         engine._load_audio(a)
         engine._load_audio(b)
         engine._load_audio(a)  # touches a -> b is now oldest
@@ -237,13 +227,13 @@ class TestWhisperIntegration:
     """
 
     def test_silence_yields_high_no_speech_prob_or_empty_text(
-        self, tmp_path: Path
+        self, tmp_path: Path, write_synthetic_wav
     ) -> None:
         # Pure silence — Whisper should either return no segments at all
         # (which our _aggregate maps to no_speech_prob=1.0) or flag the
         # result as non-speech. Either outcome is correct; the assembly
         # layer drops both.
-        audio_path = _write_synthetic_wav(
+        audio_path = write_synthetic_wav(
             tmp_path / "silence.wav", duration_seconds=2.0
         )
         segment = SpeechSegment(
