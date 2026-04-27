@@ -8,5 +8,6 @@ alembic==1.14.1
 pgvector==0.3.6
 psycopg[binary]==3.2.6
 openai>=1.30.0
-faster-whisper==1.0.3
+faster-whisper==1.1.0
+numpy>=1.26.0
 soundfile==0.12.1

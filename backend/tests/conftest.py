@@ -9,9 +9,7 @@ pass their own ``db_url`` directly, and LLM calls are fully mocked.
 from pathlib import Path
 import os
 
-import numpy as np
 import pytest
-import soundfile as sf
 
 # Provide the required settings fields so pydantic-settings validates cleanly.
 # Tests always override these at the MemoryStore/LLMClient constructor level,
@@ -20,31 +18,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("OPENAI_API_KEY", "test-key-not-used-in-tests")
 
 
-# ── @pytest.mark.slow opt-in ─────────────────────────────────
-#
-# Tests marked `@pytest.mark.slow` (e.g. real Whisper integration in
-# test_asr_engine.py) are skipped by default. Pass `--runslow` to include
-# them. This is the canonical pytest recipe from the docs.
-
-
-def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--runslow",
-        action="store_true",
-        default=False,
-        help="Run tests marked @pytest.mark.slow (load real ML models, etc.)",
-    )
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
-    if config.getoption("--runslow"):
-        return
-    skip_slow = pytest.mark.skip(reason="needs --runslow to run")
-    for item in items:
-        if "slow" in item.keywords:
-            item.add_marker(skip_slow)
+# `--runslow` plumbing lives in the repo-root conftest.py because
+# `pytest_addoption` must be registered above the rootdir.
 
 
 # ── Shared audio fixture for ASR tests ───────────────────────
@@ -67,6 +42,9 @@ def write_synthetic_wav():
         sample_rate: int = 16_000,
         channels: int = 1,
     ) -> Path:
+        import numpy as np
+        import soundfile as sf
+
         n_samples = int(duration_seconds * sample_rate)
         if frequency is None:
             samples = np.zeros(n_samples, dtype=np.float32)

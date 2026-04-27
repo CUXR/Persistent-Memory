@@ -25,6 +25,12 @@ SILENCE_THRESHOLD = 0.6
 # one DialogTurn. Larger gaps start a new turn even for the same speaker.
 MAX_MERGE_GAP_SECONDS = 2.0
 
+# Minimum length of a same-token run before we treat it as a Whisper
+# repetition hallucination and collapse it. Set to 3 deliberately so that
+# legitimate doublings ("had had", "that that") survive untouched while
+# pathological loops ("the the the the") get cleaned up.
+MIN_REPETITION_RUN = 3
+
 _WHITESPACE_RE = re.compile(r"\s+")
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.!?;:])")
 
@@ -45,10 +51,62 @@ def filter_empty_or_silent(
     ]
 
 
+def collapse_repetitions(
+    text: str, min_runs: int = MIN_REPETITION_RUN
+) -> str:
+    """Collapse runs of ``min_runs`` or more identical adjacent tokens to one.
+
+    Targets a specific Whisper failure mode where the decoder loops on a
+    short fragment ("the the the the", "thank you thank you thank you") and
+    pollutes the transcript. Conservative by design:
+
+      - Single-token runs only — phrase-level dedup ("I think I think") is
+        more dangerous (legitimate phrase repetition exists) and not handled.
+      - Exact, case-sensitive token comparison after whitespace split.
+        Punctuation-attached tokens do NOT match the bare form ("hello,"
+        does not collapse against "hello").
+      - Below the ``min_runs`` threshold (default 3), repetition is preserved
+        so legitimate English like "had had" or "that that" survives.
+
+    Pure function. Idempotent: collapsing twice gives the same result.
+    """
+    if min_runs < 2:
+        raise ValueError(f"min_runs must be >= 2, got {min_runs}")
+
+    tokens = text.split()
+    if len(tokens) < min_runs:
+        return text
+
+    out: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        # Find length of run starting at i where every token matches tokens[i].
+        j = i + 1
+        while j < n and tokens[j] == tokens[i]:
+            j += 1
+        run_len = j - i
+        if run_len >= min_runs:
+            out.append(tokens[i])  # collapse the entire run to one token
+        else:
+            out.extend(tokens[i:j])  # keep run as-is
+        i = j
+
+    return " ".join(out)
+
+
 def normalize_text(text: str) -> str:
-    """Collapse whitespace and tighten punctuation spacing. Pure function."""
+    """Collapse whitespace, tighten punctuation, and de-dupe Whisper
+    repetition loops. Pure function.
+
+    Pipeline:
+      1. Collapse runs of whitespace, strip leading/trailing.
+      2. Remove space before ``,.!?;:``.
+      3. Collapse Whisper repetition runs (see ``collapse_repetitions``).
+    """
     collapsed = _WHITESPACE_RE.sub(" ", text).strip()
-    return _SPACE_BEFORE_PUNCT_RE.sub(r"\1", collapsed)
+    tightened = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", collapsed)
+    return collapse_repetitions(tightened)
 
 
 def merge_adjacent_turns(

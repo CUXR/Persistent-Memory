@@ -15,7 +15,9 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.schema.asr import RawTranscription, SpeechSegment
 from app.services.asr_assembly import (
     MAX_MERGE_GAP_SECONDS,
+    MIN_REPETITION_RUN,
     SILENCE_THRESHOLD,
+    collapse_repetitions,
     filter_empty_or_silent,
     merge_adjacent_turns,
     normalize_text,
@@ -100,6 +102,77 @@ class TestNormalizeText:
 
     def test_empty_or_whitespace_becomes_empty_string(self) -> None:
         assert normalize_text(" \t\n ") == ""
+
+    def test_collapses_whisper_repetition_loop_via_normalize(self) -> None:
+        # Verifies the pipeline composes: whitespace collapse + dedup.
+        result = normalize_text("the   the the the cat")
+        assert result == "the cat"
+
+
+class TestCollapseRepetitions:
+    def test_collapses_three_consecutive_repeats(self) -> None:
+        assert collapse_repetitions("the the the cat") == "the cat"
+
+    def test_collapses_long_runs(self) -> None:
+        assert collapse_repetitions("yes yes yes yes yes please") == "yes please"
+
+    def test_keeps_two_consecutive_repeats(self) -> None:
+        # Legitimate English doublings must survive.
+        assert collapse_repetitions("had had enough") == "had had enough"
+        assert collapse_repetitions("that that one") == "that that one"
+
+    def test_preserves_non_repetitive_text(self) -> None:
+        text = "the quick brown fox jumps over the lazy dog"
+        assert collapse_repetitions(text) == text
+
+    def test_collapses_at_start(self) -> None:
+        assert collapse_repetitions("no no no I disagree") == "no I disagree"
+
+    def test_collapses_at_end(self) -> None:
+        assert collapse_repetitions("thank you bye bye bye") == "thank you bye"
+
+    def test_collapses_multiple_independent_runs(self) -> None:
+        # Two independent runs each collapse to a single occurrence;
+        # tokens between/around the runs are preserved.
+        result = collapse_repetitions("the the the cat sat sat sat down")
+        assert result == "the cat sat down"
+
+    def test_case_sensitive_match(self) -> None:
+        # "The" and "the" are different tokens — no collapse.
+        assert collapse_repetitions("The the the cat") == "The the the cat"
+
+    def test_punctuation_attached_does_not_match_bare(self) -> None:
+        # "hello," and "hello" are different tokens.
+        assert collapse_repetitions("hello, hello hello there") == "hello, hello hello there"
+
+    def test_empty_text(self) -> None:
+        assert collapse_repetitions("") == ""
+
+    def test_single_token(self) -> None:
+        assert collapse_repetitions("hello") == "hello"
+
+    def test_two_tokens_below_threshold(self) -> None:
+        assert collapse_repetitions("hi hi") == "hi hi"
+
+    def test_custom_min_runs_threshold(self) -> None:
+        # min_runs=2 collapses pairs too.
+        assert collapse_repetitions("had had enough", min_runs=2) == "had enough"
+
+    def test_min_runs_below_two_raises(self) -> None:
+        with pytest.raises(ValueError, match="min_runs must be >= 2"):
+            collapse_repetitions("anything", min_runs=1)
+
+    def test_default_threshold_matches_module_constant(self) -> None:
+        # The function default and the module constant should not drift.
+        assert MIN_REPETITION_RUN == 3
+
+    def test_idempotent(self) -> None:
+        # Once a run is collapsed to a single token, a second pass changes
+        # nothing — the surviving single occurrence is below threshold.
+        text = "the the the the cat sat sat sat"
+        once = collapse_repetitions(text)
+        twice = collapse_repetitions(once)
+        assert once == twice == "the cat sat"
 
 
 class TestMergeAdjacentTurns:

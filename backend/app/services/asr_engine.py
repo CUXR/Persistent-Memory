@@ -104,18 +104,6 @@ class WhisperEngine:
             no_speech_prob=no_speech_prob,
         )
 
-    def transcribe_many(
-        self, segments: list[SpeechSegment]
-    ) -> list[RawTranscription]:
-        """Transcribe an ordered list of SpeechSegments.
-
-        Convenience for the common case (many segments, one or few
-        audio files). Order of output matches order of input. Per-segment
-        failures propagate; this method does not swallow exceptions —
-        that policy lives in asr.transcribe_segments().
-        """
-        return [self.transcribe(s) for s in segments]
-
     # ── Internal ─────────────────────────────────────────────
 
     def _ensure_model(self) -> "WhisperModel":

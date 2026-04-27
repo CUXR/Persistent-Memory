@@ -125,13 +125,12 @@ class DialogTurn(BaseModel):
         gt=0.0,
         description="Turn end in seconds (latest constituent segment).",
     )
-    asr_confidence: float | None = Field(
-        default=None,
+    asr_confidence: float = Field(
         ge=0.0,
         le=1.0,
         description=(
             "exp(avg_logprob) averaged across constituent segments — the mean "
-            "per-token probability in [0, 1]. None if not available."
+            "per-token probability in [0, 1]."
         ),
     )
     segment_count: int = Field(
