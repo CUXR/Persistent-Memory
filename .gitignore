@@ -64,6 +64,7 @@ logs/
 Thumbs.db
 
 # Project-local docs/agent metadata
+ISSUES.md
 AGENTS.md
 CLAUDE.md
 .claude/
