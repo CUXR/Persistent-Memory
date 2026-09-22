@@ -117,6 +117,7 @@ class PersonFact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(VECTOR_TYPE, nullable=True)
 
     person: Mapped["Person"] = relationship(back_populates="facts")
     source_episode: Mapped["Episode"] = relationship(back_populates="introduced_facts")

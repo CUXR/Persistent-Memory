@@ -1,5 +1,6 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+httpx<0.28  # fastapi.testclient (starlette 0.27) breaks on httpx>=0.28's Client API
 sqlalchemy==2.0.23
 pydantic==2.5.0
 pydantic-settings==2.1.0
