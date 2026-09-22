@@ -1,0 +1,12 @@
+Alex: Hey, I don't think we've met — I'm Alex.
+Jordan: Jordan Lee, nice to meet you! I'm here showing off the new haptic glove demo.
+Alex: Oh nice, are you with Cornell XR?
+Jordan: Yeah, I'm on the Cornell XR research team. I finished a triathlon last weekend, so I'm running on fumes today.
+Alex: That's impressive! Do you do those often?
+Jordan: A couple times a year. Honestly I love climbing more than running though.
+Alex: Same here. Any big plans coming up?
+Jordan: I'm starting a new job at a robotics startup next March, so enjoying the demos while I can.
+Alex: Congrats! Do you still work with Sam on the glove project?
+Jordan: Yeah, Sam Rivera and I have been collaborating on it for months.
+Alex: Small world, I know Sam too. Anyway, this demo is really cool.
+Jordan: Thanks, glad you like it.

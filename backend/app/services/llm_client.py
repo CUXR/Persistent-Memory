@@ -20,6 +20,7 @@ from ..schema.ingestion import (
     EpisodeSummaryLLMResponse,
     FactExtractionLLMResponse,
 )
+from ..schema.memory_extraction import MemoryExtractionLLMResponse
 
 if TYPE_CHECKING:
     pass
@@ -67,6 +68,33 @@ _FACTS_SYSTEM = (
 )
 
 _FACTS_USER = (
+    "Conversation between {wearer_name} and {interlocutor_name}:\n\n{transcript}"
+)
+
+_MEMORY_EXTRACTION_SYSTEM = (
+    "You are an information extraction engine for a personal memory assistant worn as "
+    "smart glasses by {wearer_name}.\n\n"
+    "From the conversation below, extract everything worth remembering about "
+    "{interlocutor_name} into four typed categories:\n\n"
+    "facts — durable factual descriptors. category must be exactly one of: "
+    "visual_descriptor, affiliation, hobby.\n"
+    "preferences — likes, dislikes, and opinions. polarity must be exactly one of: "
+    "like, dislike, neutral.\n"
+    "relationships — directed relationships to OTHER named people or organisations, "
+    "using snake_case labels (e.g. works_at, member_of, knows, is_married_to). "
+    "target_name is the other party's name.\n"
+    "events — specific occurrences mentioned, past or planned (e.g. 'ran a triathlon "
+    "last weekend', 'starting a new job in March'). occurred_at is a short free-text "
+    "temporal reference exactly as implied by the conversation (e.g. 'last weekend', "
+    "'next March'), or null if no time was mentioned.\n\n"
+    "For every item, set confidence in [0, 1] reflecting how certain you are it is "
+    "accurate and worth storing.\n"
+    "Only extract information about {interlocutor_name}, never about {wearer_name}.\n"
+    "Do not invent information; extract only what is stated or strongly implied. "
+    "Return empty lists for categories with nothing worth storing."
+)
+
+_MEMORY_EXTRACTION_USER = (
     "Conversation between {wearer_name} and {interlocutor_name}:\n\n{transcript}"
 )
 
@@ -207,5 +235,60 @@ class LLMClient:
             "extract_facts: %d facts, %d edges extracted",
             len(result.facts),
             len(result.edges),
+        )
+        return result
+
+    async def extract_memories(
+        self,
+        transcript: str,
+        wearer_name: str,
+        interlocutor_name: str,
+    ) -> MemoryExtractionLLMResponse:
+        """Extract typed memory candidates (facts/preferences/relationships/events).
+
+        Unlike :meth:`extract_facts`, this covers all four memory types in a
+        single structured-output call and performs no deduplication against
+        existing store state — that is the caller's concern.
+
+        Args:
+            transcript: Raw conversation text in ``Speaker: utterance`` format.
+            wearer_name: Display name of the smart-glasses wearer.
+            interlocutor_name: Display name of the conversation partner.
+
+        Returns:
+            Parsed :class:`~app.schema.memory_extraction.MemoryExtractionLLMResponse`.
+        """
+
+        system_msg = _MEMORY_EXTRACTION_SYSTEM.format(
+            wearer_name=wearer_name,
+            interlocutor_name=interlocutor_name,
+        )
+        user_msg = _MEMORY_EXTRACTION_USER.format(
+            wearer_name=wearer_name,
+            interlocutor_name=interlocutor_name,
+            transcript=transcript,
+        )
+
+        logger.debug("extract_memories: calling %s for interlocutor=%s", self._model, interlocutor_name)
+
+        completion = await self._client.beta.chat.completions.parse(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            response_format=MemoryExtractionLLMResponse,
+        )
+
+        result = completion.choices[0].message.parsed
+        if result is None:
+            raise ValueError("OpenAI returned a null parsed result for memory extraction")
+
+        logger.debug(
+            "extract_memories: %d facts, %d preferences, %d relationships, %d events extracted",
+            len(result.facts),
+            len(result.preferences),
+            len(result.relationships),
+            len(result.events),
         )
         return result
