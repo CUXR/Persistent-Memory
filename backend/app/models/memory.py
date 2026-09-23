@@ -10,6 +10,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, Uniqu
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from .person import VECTOR_TYPE
 
 if TYPE_CHECKING:
     from .episode import Episode
@@ -98,6 +99,7 @@ class Summary(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+    embedding: Mapped[list[float] | None] = mapped_column(VECTOR_TYPE, nullable=True)
 
     person: Mapped["Person"] = relationship(back_populates="summaries")
     episode: Mapped["Episode"] = relationship(back_populates="summaries")

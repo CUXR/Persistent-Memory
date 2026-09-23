@@ -26,9 +26,13 @@ from ..schema.memory import (
     PersonIn,
     PersonOut,
     ProfileContext,
+    RankedFactOut,
+    RankedSummaryOut,
+    RelevantMemories,
     SummaryIn,
     SummaryOut,
 )
+from ..services import memory_ranking
 
 logger = logging.getLogger("app.crud.memory_store")
 settings = get_settings()
@@ -243,6 +247,7 @@ class MemoryStore:
         transcript: str = "",
         summary: str = "",
         participants: Optional[list[UUID]] = None,
+        importance_score: Optional[float] = None,
     ) -> UUID:
         """Insert a conversation episode and its participant links.
 
@@ -256,6 +261,7 @@ class MemoryStore:
             transcript=transcript,
             summary=summary,
             participant_ids=participants or [],
+            importance_score=importance_score,
         )
 
         with self.Session() as session:
@@ -272,6 +278,7 @@ class MemoryStore:
                     end_time=data.time_end,
                     transcript=data.transcript,
                     dialogue_summary=data.summary,
+                    importance_score=_decimal(data.importance_score),
                 )
                 session.add(episode)
                 session.flush()
@@ -293,6 +300,7 @@ class MemoryStore:
         episode_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
+        embedding: Optional[list[float]] = None,
     ) -> UUID:
         """Persist a structured fact about a person.
 
@@ -308,6 +316,7 @@ class MemoryStore:
             episode_id=episode_id,
             valid_from=valid_from,
             valid_to=valid_to,
+            embedding=embedding,
         )
 
         with self.Session() as session:
@@ -323,6 +332,7 @@ class MemoryStore:
                     source_episode_id=data.episode_id,
                     valid_from=data.valid_from,
                     valid_to=data.valid_to,
+                    embedding=data.embedding,
                 )
                 session.add(row)
                 session.flush()
@@ -338,6 +348,7 @@ class MemoryStore:
         episode_time_start: Optional[datetime] = None,
         episode_time_end: Optional[datetime] = None,
         episode_id: Optional[UUID] = None,
+        embedding: Optional[list[float]] = None,
     ) -> UUID:
         """Persist a summary slice for a person.
 
@@ -351,6 +362,7 @@ class MemoryStore:
             episode_time_start=episode_time_start,
             episode_time_end=episode_time_end,
             episode_id=episode_id,
+            embedding=embedding,
         )
 
         with self.Session() as session:
@@ -364,6 +376,7 @@ class MemoryStore:
                     episode_time_start=data.episode_time_start,
                     episode_time_end=data.episode_time_end,
                     episode_id=data.episode_id,
+                    embedding=data.embedding,
                 )
                 session.add(row)
                 session.flush()
@@ -554,7 +567,148 @@ class MemoryStore:
                 persona90=person.persona90 or [],
             )
 
+    def get_relevant_memories(
+        self,
+        person_id: UUID,
+        limit: int = 5,
+        query_embedding: Optional[list[float]] = None,
+        now: Optional[datetime] = None,
+        half_life_days: float = memory_ranking.DEFAULT_HALF_LIFE_DAYS,
+    ) -> RelevantMemories:
+        """Return a bounded, ranked slice of memories for a re-encountered person.
+
+        Facts and summaries are each scored independently by a blend of
+        recency (exponential decay from their anchor timestamp), relevance
+        (fact confidence, or the linked episode's ``importance_score``), and
+        — when ``query_embedding`` is supplied — cosine similarity against
+        each item's stored embedding. The top ``limit`` of each are returned
+        alongside a short human-readable note on the first encounter.
+
+        Args:
+            person_id: The person being re-encountered.
+            limit: Maximum number of facts and of summaries to return.
+            query_embedding: Optional vector (e.g. of the current scene or
+                conversation) to rank memories by semantic similarity.
+            now: Reference time for recency scoring; defaults to the current
+                UTC time.
+            half_life_days: Number of days for a memory's recency score to
+                halve.
+
+        Returns:
+            A ``RelevantMemories`` bundle with bounded, ranked facts and
+            summaries plus an ``interaction_context`` string.
+        """
+
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+
+        now = now or datetime.now(timezone.utc)
+
+        with self.Session() as session:
+            self._get_person(session, person_id, self._owner_user_id)
+
+            fact_rows = session.scalars(
+                select(PersonFact).where(PersonFact.person_id == person_id)
+            ).all()
+
+            summary_rows = session.execute(
+                select(Summary, Episode.importance_score)
+                .outerjoin(Episode, Episode.id == Summary.episode_id)
+                .where(Summary.person_id == person_id)
+            ).all()
+
+            first_episode = session.execute(
+                select(Episode.start_time, Episode.dialogue_summary)
+                .join(EpisodeParticipant, EpisodeParticipant.episode_id == Episode.id)
+                .where(EpisodeParticipant.person_id == person_id)
+                .order_by(Episode.start_time.asc())
+                .limit(1)
+            ).first()
+
+        ranked_facts = [
+            self._score_fact(row, query_embedding, now, half_life_days)
+            for row in fact_rows
+        ]
+        ranked_facts.sort(key=lambda scored: scored[0], reverse=True)
+
+        ranked_summaries = [
+            self._score_summary(row, episode_importance, query_embedding, now, half_life_days)
+            for row, episode_importance in summary_rows
+        ]
+        ranked_summaries.sort(key=lambda scored: scored[0], reverse=True)
+
+        interaction_context = memory_ranking.build_interaction_context(
+            first_met_at=first_episode.start_time if first_episode else None,
+            first_met_summary=first_episode.dialogue_summary if first_episode else None,
+            now=now,
+        )
+
+        return RelevantMemories(
+            interaction_context=interaction_context,
+            facts=[out for _, out in ranked_facts[:limit]],
+            summaries=[out for _, out in ranked_summaries[:limit]],
+        )
+
     # ── Private helpers ──────────────────────────────────────
+
+    def _score_fact(
+        self,
+        row: PersonFact,
+        query_embedding: Optional[list[float]],
+        now: datetime,
+        half_life_days: float,
+    ) -> tuple[float, RankedFactOut]:
+        anchor = row.valid_from or row.created_at
+        recency = memory_ranking.recency_score(anchor, now, half_life_days)
+        relevance = _float(row.confidence)
+        similarity = (
+            memory_ranking.cosine_similarity(query_embedding, row.embedding)
+            if query_embedding is not None and row.embedding
+            else None
+        )
+        score = memory_ranking.score_memory(recency=recency, relevance=relevance, similarity=similarity)
+
+        return score, RankedFactOut(
+            id=row.id,
+            fact_text=row.fact_text,
+            confidence=relevance,
+            fact_category=row.fact_category,
+            created_at=_iso(row.created_at) or "",
+            score=score,
+            recency_score=recency,
+            relevance_score=relevance,
+            similarity_score=similarity,
+        )
+
+    def _score_summary(
+        self,
+        row: Summary,
+        episode_importance: Optional[Decimal],
+        query_embedding: Optional[list[float]],
+        now: datetime,
+        half_life_days: float,
+    ) -> tuple[float, RankedSummaryOut]:
+        anchor = row.episode_time_end or row.episode_time_start or row.created_at
+        recency = memory_ranking.recency_score(anchor, now, half_life_days)
+        relevance = _float(episode_importance) if episode_importance is not None else memory_ranking.NEUTRAL_RELEVANCE
+        similarity = (
+            memory_ranking.cosine_similarity(query_embedding, row.embedding)
+            if query_embedding is not None and row.embedding
+            else None
+        )
+        score = memory_ranking.score_memory(recency=recency, relevance=relevance, similarity=similarity)
+
+        return score, RankedSummaryOut(
+            id=row.id,
+            summary_text=row.summary_text,
+            episode_time_start=_iso(row.episode_time_start),
+            episode_time_end=_iso(row.episode_time_end),
+            created_at=_iso(row.created_at) or "",
+            score=score,
+            recency_score=recency,
+            relevance_score=relevance,
+            similarity_score=similarity,
+        )
 
     def _load_person(self, session: Session, person_id: UUID) -> PersonOut:
         person = self._get_person(session, person_id, person_user_id=None)

@@ -68,6 +68,7 @@ class EpisodeIn(BaseModel):
     transcript: str = ""
     summary: str = ""
     participant_ids: list[UUID] = Field(default_factory=list)
+    importance_score: Optional[float] = None
 
     @field_validator("time_end")
     @classmethod
@@ -76,6 +77,13 @@ class EpisodeIn(BaseModel):
         if start and v < start:
             raise ValueError("time_end must be >= time_start")
         return v
+
+    @field_validator("importance_score")
+    @classmethod
+    def validate_importance_score(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        return _check_confidence(v)
 
 
 class FactIn(BaseModel):
@@ -87,6 +95,7 @@ class FactIn(BaseModel):
     episode_id: Optional[UUID] = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
+    embedding: Optional[list[float]] = None
 
     @field_validator("confidence")
     @classmethod
@@ -109,6 +118,7 @@ class SummaryIn(BaseModel):
     episode_time_start: Optional[datetime] = None
     episode_time_end: Optional[datetime] = None
     episode_id: Optional[UUID] = None
+    embedding: Optional[list[float]] = None
 
     @field_validator("episode_time_end")
     @classmethod
@@ -198,3 +208,43 @@ class ProfileContext(BaseModel):
     summaries: list[SummaryOut] = Field(default_factory=list)
     edges_from: list[EdgeOut] = Field(default_factory=list)
     persona90: list[float] = Field(default_factory=list)
+
+
+# ── Ranked retrieval (re-encounter) schemas ──────────────────
+
+class RankedFactOut(BaseModel):
+    """A fact scored for relevance on re-encountering its person."""
+    id: UUID
+    fact_text: str
+    confidence: float
+    fact_category: Optional[str] = None
+    created_at: str
+    score: float
+    recency_score: float
+    relevance_score: float
+    similarity_score: Optional[float] = None
+
+
+class RankedSummaryOut(BaseModel):
+    """A summary scored for relevance on re-encountering its person."""
+    id: UUID
+    summary_text: str
+    episode_time_start: Optional[str]
+    episode_time_end: Optional[str]
+    created_at: str
+    score: float
+    recency_score: float
+    relevance_score: float
+    similarity_score: Optional[float] = None
+
+
+class RelevantMemories(BaseModel):
+    """Bounded, ranked memories to surface when a person is re-encountered.
+
+    ``facts`` and ``summaries`` are each independently ranked by a blend of
+    recency, relevance, and (when a ``query_embedding`` is supplied) vector
+    similarity, then truncated to the requested ``limit``.
+    """
+    interaction_context: str
+    facts: list[RankedFactOut] = Field(default_factory=list)
+    summaries: list[RankedSummaryOut] = Field(default_factory=list)
