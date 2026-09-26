@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "persistent-memory"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.26,<3",
+    "pydantic==2.5.0",
+    "soundfile>=0.13,<0.14",
+    "scipy>=1.11,<2",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend", "services"]
+include = ["app*", "audio_pipeline*"]
+exclude = ["tests*", "scripts*"]

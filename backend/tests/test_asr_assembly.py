@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-import sys
 
 import pytest
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.schema.asr import RawTranscription, SpeechSegment
 from app.services.asr_assembly import (
@@ -28,6 +23,7 @@ def _seg(start: float = 0.0, end: float = 1.0, speaker: str = "user") -> SpeechS
     return SpeechSegment(
         start_time=start,
         end_time=end,
+        speaker_id=speaker,
         speaker_label=speaker,  # type: ignore[arg-type]
         audio_path=Path("/tmp/fake.wav"),
     )

@@ -1,20 +1,12 @@
 """
 backend/app/schema/memory.py
 ──────────────
-Pydantic models for the EgoMem memory store.
-
-Every public method on MemoryStore accepts and returns these models.
-This gives us:
-  - runtime input validation (replaces Zod from the TS world)
-  - auto-generated JSON schemas (useful for FastAPI)
-  - a single place to see every data shape in the system
+Pydantic models for the memory store.
 
 Design notes:
   - "In" models  = what you pass INTO a method  (write inputs)
   - "Out" models = what you get BACK from a method (read outputs)
   - ProfileContext = the composite shape returned by get_profile_context()
-                     This maps directly to the Level-1 MemChunk content
-                     that gets injected into the dialog model (Eq. 2: p_t).
 """
 
 from __future__ import annotations
@@ -183,17 +175,7 @@ class EdgeOut(BaseModel):
 
 
 class ProfileContext(BaseModel):
-    """
-    The composite view returned by get_profile_context().
-
-    This is the Python equivalent of the Level-1 MemChunk content
-    from the paper. When the retrieval process identifies a user,
-    it calls get_profile_context(person_id) and the result gets
-    serialized into the text channel of the MemChunk (Eq. 2: p_t).
-
-    Shape matches the issue spec:
-        { facts, summaries, edges_from, persona90 }
-    """
+    """Everything stored about one person, returned by get_profile_context()."""
     facts: list[FactOut] = Field(default_factory=list)
     summaries: list[SummaryOut] = Field(default_factory=list)
     edges_from: list[EdgeOut] = Field(default_factory=list)

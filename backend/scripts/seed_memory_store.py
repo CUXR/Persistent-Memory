@@ -8,7 +8,6 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.database import Base
 from app.crud.memory_store import MemoryStore
 from app.models.user import User
 
@@ -17,22 +16,20 @@ def _get_or_create_seed_owner(db_url: str):
     """Return the first user's UUID, creating a seed user if none exists."""
 
     engine = create_engine(db_url, future=True)
-    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
-    with Session() as session:
+    with Session.begin() as session:
         owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
         if owner is None:
-            with session.begin():
-                owner = User(
-                    first_name="Seed",
-                    last_name="Owner",
-                    display_name="Seed Owner",
-                    username="seed-owner",
-                )
-                session.add(owner)
-                session.flush()
-                print(f"Created seed owner user id={owner.id}")
+            owner = User(
+                first_name="Seed",
+                last_name="Owner",
+                display_name="Seed Owner",
+                username="seed-owner",
+            )
+            session.add(owner)
+            session.flush()
+            print(f"Created seed owner user id={owner.id}")
         else:
             print(f"Using existing owner user id={owner.id}")
         owner_id = owner.id
@@ -51,16 +48,8 @@ def main() -> None:
     store.initialize(create_schema=False)
 
     try:
-        emily = store.upsert_person(
-            name="Emily Chen",
-            face_key="face_emily_demo",
-            voice_key="voice_emily_demo",
-            persona90=[0.5] * 90,
-        )
-        john = store.upsert_person(
-            name="John Rivera",
-            face_key="face_john_demo",
-        )
+        emily = store.upsert_person(name="Emily Chen")
+        john = store.upsert_person(name="John Rivera")
 
         now = datetime.now(timezone.utc)
         episode_id = store.write_episode(
@@ -71,7 +60,6 @@ def main() -> None:
             participants=[emily.id, john.id],
         )
         store.write_fact(emily.id, "likes swimming", confidence=0.9, episode_id=episode_id)
-        store.write_pref(emily.id, "energy: high", confidence=0.8, episode_id=episode_id)
         store.write_summary(
             emily.id,
             "Emily discussed swimming and hiking plans.",

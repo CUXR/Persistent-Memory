@@ -6,10 +6,11 @@ output schemas sent to the OpenAI API via ``response_format``.
 
 from __future__ import annotations
 
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from .memory import PersonFactCategory as FactCategory
 
 
 # ---------------------------------------------------------------------------
@@ -29,10 +30,6 @@ class EpisodeSummaryLLMResponse(BaseModel):
             "0.0 = trivial small talk, 1.0 = life-changing event."
         ),
     )
-
-
-# Must align with the DB CHECK constraint on PersonFact.fact_category
-FactCategory = Literal["visual_descriptor", "affiliation", "hobby"]
 
 
 class ExtractedFact(BaseModel):

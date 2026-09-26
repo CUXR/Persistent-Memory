@@ -5,9 +5,9 @@ Uses an in-memory SQLite database, so no Postgres setup is required.
 
 Usage
 -----
-From the ``backend/`` directory::
+From the repository root, after the README setup (so ``.env`` is found)::
 
-    python scripts/live_ingestion.py
+    python backend/scripts/live_ingestion.py
 
 What it tests
 -------------
@@ -35,18 +35,11 @@ import asyncio
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Ensure the backend package root is on sys.path when run directly
-# ---------------------------------------------------------------------------
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
+from uuid import uuid4
 
 from app.core.config import get_settings
 from app.crud.memory_store import MemoryStore
-from app.models.user import UserFact
+from app.models.user import User, UserFact
 from app.services.conversation_ingestion import ingest_conversation
 from app.services.llm_client import LLMClient
 
@@ -146,14 +139,10 @@ def _print_profile(store: MemoryStore, person_id, label: str) -> None:
 
 def _seed_user_facts(store: MemoryStore, facts: list[str]) -> None:
     """Add wearer facts so the LLM can detect shared interests."""
-    store.upsert_person(name="__owner_init__", aliases=[])  # trigger owner creation
     with store.Session() as session:
         with session.begin():
-            from sqlalchemy import select
-            from app.models.user import User
-            owner = session.scalar(select(User).limit(1))
             for text in facts:
-                session.add(UserFact(user_id=owner.id, fact_text=text))
+                session.add(UserFact(user_id=store.owner_user_id, fact_text=text))
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +161,11 @@ async def main() -> None:
     print(f"Max retries : {settings.openai_max_retries}")
 
     # Shared in-memory store and LLM client for all scenarios
-    store = MemoryStore("sqlite+pysqlite:///:memory:")
+    owner_id = uuid4()
+    store = MemoryStore("sqlite+pysqlite:///:memory:", owner_user_id=owner_id)
     store.initialize()
+    with store.Session.begin() as session:
+        session.add(User(id=owner_id, first_name="Alex", username="live-ingestion-owner"))
     client = LLMClient()
 
     # Seed wearer facts so shared-interest detection has material to work with
@@ -233,7 +225,7 @@ async def main() -> None:
         print("  Ingesting a third conversation where Jordan mentions Acme.")
         print("  Expect: a works_at (or similar) edge written to Acme Corp.")
 
-        store.upsert_person(name="Acme Corp", aliases=["Acme"])
+        store.upsert_person(name="Acme Corp")
 
         result3 = await ingest_conversation(
             transcript=TRANSCRIPT_3,

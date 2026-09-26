@@ -1,342 +1,149 @@
-"""Audio ingestion pipeline — rolling window state machine.
-
-This is the top-level entry point for the audio segmentation pipeline.
-Callers push raw audio chunks in real time; the pipeline manages VAD
-pre-screening, conversation-buffer accumulation, diarization, and speaker
-attribution internally.
-
-State machine
--------------
-::
-
-    ┌──────────┐  speech detected   ┌─────────────┐  buf full / flush()
-    │   IDLE   │ ─────────────────► │ ACCUMULATING │ ──────────────────►┐
-    └──────────┘                    └─────────────┘                     │
-         ▲                                 │                            │
-         │    SILENCE_WINDOWS_EOC silent   │                   ┌────────▼───────┐
-         └─────────────────────────────────┘                   │   PROCESSING   │
-                                                               └────────────────┘
-                                                                        │
-                                                               segments returned
-                                                               → caller, state → IDLE
-
-Transitions:
-
-* **IDLE → ACCUMULATING**: When a VAD window returns ``contains_speech=True``.
-  The 5-second window that triggered the transition is prepended to the
-  conversation buffer so no speech is lost.
-
-* **ACCUMULATING → IDLE** (via PROCESSING): Either the conversation buffer
-  reaches ``MAX_CONVERSATION_SAMPLES`` or ``SILENCE_WINDOWS_EOC`` consecutive
-  silent 5-second windows are observed.  ``flush()`` also forces this path.
-
-Usage::
-
-    vad = SileroVAD()
-    engine = DiarizationEngine(hf_token="hf_...")
-    attributor = SpeakerAttributor()
-
-    pipeline = AudioIngestionPipeline(
-        vad=vad,
-        diarization_engine=engine,
-        attributor=attributor,
-        enrolled_user_embedding=user_voice_embedding,
-    )
-
-    for chunk in audio_stream:
-        segments = pipeline.push_audio(chunk)
-        for seg in segments:
-            print(seg)
-
-    # Force-process whatever is left in the buffer.
-    final_segments = pipeline.flush()
-"""
-
+"""Silero-gated capture. Finalize a durable WAV before running expensive models."""
 from __future__ import annotations
 
-import logging
+import os
+from datetime import datetime, timedelta
 from enum import Enum, auto
-from typing import Optional
+from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
+import soundfile as sf
 
-from .diarization import DiarizationEngine
-from .segment import (
-    SAMPLE_RATE,
-    VAD_WINDOW_SAMPLES,
-    MAX_CONVERSATION_SAMPLES,
-    SILENCE_WINDOWS_EOC,
-    AudioSegment,
-)
-from .speaker_attribution import AttributionConfig, SpeakerAttributor
-from .vad import SileroVAD
-
-logger = logging.getLogger(__name__)
+from .segment import SAMPLE_RATE, Recording, validate_audio
 
 
 class ConversationState(Enum):
-    """Internal state of the ingestion pipeline."""
-
     IDLE = auto()
-    """No speech has been detected; 5-second rolling VAD windows are being discarded."""
-
     ACCUMULATING = auto()
-    """Speech detected; audio is being accumulated into the conversation buffer."""
-
-    PROCESSING = auto()
-    """The conversation buffer is being diarized (transient; not observable by caller)."""
 
 
 class AudioIngestionPipeline:
-    """Orchestrates VAD → diarization → attribution in a streaming fashion.
+    """One 16 kHz mono stream, with non-overlapping 10-second VAD checks.
 
-    Args:
-        vad:                        Initialised :class:`~.vad.SileroVAD`.
-        diarization_engine:         Initialised :class:`~.diarization.DiarizationEngine`.
-        attributor:                 Initialised :class:`~.speaker_attribution.SpeakerAttributor`.
-        enrolled_user_embedding:    Unit-normed 1-D float32 vector from
-                                    ``Person.voice_embedding``.  Pass ``None``
-                                    to use relative (best-match) attribution.
-        sample_rate:                Audio sample rate (Hz).  Must match the
-                                    model requirements (default 16 000).
-        silence_windows_eoc:        Consecutive silent VAD windows before
-                                    end-of-conversation is declared.
+    push_audio/flush return durable recordings, not ephemeral segment offsets.
+    Capture and model processing are separate so callers can queue work.
     """
 
     def __init__(
-        self,
-        vad: SileroVAD,
-        diarization_engine: DiarizationEngine,
-        attributor: SpeakerAttributor,
-        enrolled_user_embedding: Optional[np.ndarray] = None,
-        sample_rate: int = SAMPLE_RATE,
-        silence_windows_eoc: int = SILENCE_WINDOWS_EOC,
-    ) -> None:
+        self, vad, recording_dir: Path, started_at: datetime, *,
+        window_seconds: float = 10, silence_windows_eoc: int = 1,
+        max_conversation_seconds: float = 600,
+    ):
+        if started_at.tzinfo is None or started_at.utcoffset() is None:
+            raise ValueError("started_at must include a timezone")
+        if not np.isfinite(window_seconds) or window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        if not np.isfinite(max_conversation_seconds) or max_conversation_seconds < window_seconds:
+            raise ValueError("Conversation limit must be at least one VAD window")
+        if silence_windows_eoc < 1:
+            raise ValueError("silence_windows_eoc must be positive")
         self._vad = vad
-        self._diarization_engine = diarization_engine
-        self._attributor = attributor
-        self._enrolled_embedding = enrolled_user_embedding
-        self._sample_rate = sample_rate
-        self._silence_windows_eoc = silence_windows_eoc
+        self._directory = Path(recording_dir).resolve()
+        self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._started_at = started_at
+        self._window_samples = int(window_seconds * SAMPLE_RATE)
+        if self._window_samples < 1:
+            raise ValueError("VAD window is smaller than one sample")
+        # Whole windows avoid truncating a window at the accumulation boundary.
+        self._max_samples = int(max_conversation_seconds * SAMPLE_RATE)
+        if self._max_samples % self._window_samples:
+            raise ValueError("Conversation limit must be a multiple of the VAD window")
+        self._silence_limit = silence_windows_eoc
+        self._partial = np.empty(0, dtype=np.float32)
+        self._samples_seen = 0
+        self._clear_conversation()
 
-        # Conversation buffer.
-        self._conversation_buffer: list[np.ndarray] = []
-        self._conversation_sample_count: int = 0
-
-        # Offset (in samples) from the start of the recording to the first
-        # sample in the current conversation buffer.
-        self._conversation_start_sample: int = 0
-
-        # Running total of samples seen since the pipeline was created (or last
-        # reset).  Used to set the conversation_start_sample.
-        self._total_samples_seen: int = 0
-
-        self._state: ConversationState = ConversationState.IDLE
-        self._consecutive_silent_windows: int = 0
-
-        # Partial chunk accumulator (samples not yet forming a full VAD window).
-        self._partial: np.ndarray = np.empty(0, dtype=np.float32)
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
+    def _clear_conversation(self):
+        self._buffer = []
+        self._count = 0
+        self._start_sample = 0
+        self._silent_windows = 0
+        self._recording_id = None
+        self._needs_finalize = False
+        self._state = ConversationState.IDLE
 
     @property
-    def state(self) -> ConversationState:
-        """Current pipeline state (read-only)."""
+    def state(self):
         return self._state
 
     @property
-    def conversation_duration_seconds(self) -> float:
-        """Accumulated conversation audio length in seconds."""
-        return self._conversation_sample_count / self._sample_rate
+    def conversation_duration_seconds(self):
+        return self._count / SAMPLE_RATE
 
-    def push_audio(
-        self, chunk: np.ndarray
-    ) -> list[AudioSegment]:
-        """Feed a raw audio chunk into the pipeline.
+    def push_audio(self, chunk: np.ndarray) -> list[Recording]:
+        chunk = validate_audio(chunk)
+        self._partial = np.concatenate([self._partial, chunk])
+        recordings = []
+        if self._needs_finalize:
+            recordings.append(self._finalize())
+        while len(self._partial) >= self._window_samples:
+            window = self._partial[:self._window_samples].copy()
+            # Preserve the unconsumed input if VAD fails.
+            has_speech = self._vad.contains_speech(window, SAMPLE_RATE)
+            self._partial = self._partial[self._window_samples:]
+            recordings.extend(self._consume(window, has_speech))
+        return recordings
 
-        The chunk can be **any length** — the pipeline buffers internally and
-        processes only when a complete VAD window (5 s) has been accumulated.
-
-        Args:
-            chunk:  1-D float32 PCM array at the configured sample rate.
-
-        Returns:
-            A (possibly empty) list of ``AudioSegment`` objects.  Segments are
-            returned only when a conversation ends (either via silence
-            end-of-conversation detection or conversation-buffer overflow).
-        """
-        if chunk.ndim != 1:
-            raise ValueError(f"chunk must be 1-D, got shape {chunk.shape}")
-
-        # Append to partial buffer.
-        self._partial = np.concatenate([self._partial, chunk.astype(np.float32)])
-
-        results: list[AudioSegment] = []
-
-        # Drain full VAD windows from the partial buffer.
-        while len(self._partial) >= VAD_WINDOW_SAMPLES:
-            window = self._partial[:VAD_WINDOW_SAMPLES]
-            self._partial = self._partial[VAD_WINDOW_SAMPLES:]
-            segments = self._process_vad_window(window)
-            results.extend(segments)
-
-        return results
-
-    def flush(self) -> list[AudioSegment]:
-        """Process any remaining audio in the conversation buffer.
-
-        Call at stream end or whenever you want to force a conversation
-        boundary.  Includes sub-window partial audio if present.
-
-        Returns:
-            List of ``AudioSegment`` objects from the remaining buffer.
-        """
-        # Absorb any remaining partial audio into the conversation buffer.
-        if len(self._partial) > 0:
-            if self._state == ConversationState.ACCUMULATING:
-                self._append_to_conversation(self._partial)
-            self._partial = np.empty(0, dtype=np.float32)
-            self._total_samples_seen += len(self._partial)
-
-        if self._state == ConversationState.ACCUMULATING:
-            return self._finalize_conversation()
-
-        # Reset to clean state regardless.
-        self._reset()
+    def _consume(self, window, has_speech):
+        start = self._samples_seen
+        self._samples_seen += len(window)
+        if self._state == ConversationState.IDLE and not has_speech:
+            return []
+        if self._state == ConversationState.IDLE:
+            self._start_sample = start
+            self._recording_id = uuid4()
+            self._state = ConversationState.ACCUMULATING
+        self._buffer.append(window)
+        self._count += len(window)
+        self._silent_windows = 0 if has_speech else self._silent_windows + 1
+        if self._count >= self._max_samples or self._silent_windows >= self._silence_limit:
+            return [self._finalize()]
         return []
 
-    def reset(self) -> None:
-        """Discard all accumulated audio and return to IDLE state."""
-        self._reset()
-
-    # ------------------------------------------------------------------
-    # Private: state-machine methods
-    # ------------------------------------------------------------------
-
-    def _process_vad_window(self, window: np.ndarray) -> list[AudioSegment]:
-        """Handle one complete 5-second VAD window.
-
-        Returns segments if a conversation was finalized.
-        """
-        window_samples = len(window)
-        self._total_samples_seen += window_samples
-
-        has_speech = self._vad.contains_speech(window, self._sample_rate)
-        logger.debug(
-            "VAD window: state=%s speech=%s (total=%.1fs)",
-            self._state.name,
-            has_speech,
-            self._total_samples_seen / self._sample_rate,
-        )
-
-        if self._state == ConversationState.IDLE:
-            if has_speech:
-                logger.info(
-                    "Speech detected at %.1fs — entering ACCUMULATING state.",
-                    self._total_samples_seen / self._sample_rate,
-                )
-                # Record where this conversation starts.
-                self._conversation_start_sample = (
-                    self._total_samples_seen - window_samples
-                )
-                self._state = ConversationState.ACCUMULATING
-                self._consecutive_silent_windows = 0
-                self._append_to_conversation(window)
-            # else: stay IDLE, window discarded.
-            return []
-
+    def flush(self) -> list[Recording]:
+        # A previous VAD/write failure may have left full windows pending.
+        recordings = self.push_audio(np.empty(0, dtype=np.float32))
+        if len(self._partial):
+            partial = self._partial.copy()
+            has_speech = self._vad.contains_speech(partial, SAMPLE_RATE)
+            self._partial = np.empty(0, dtype=np.float32)
+            recordings.extend(self._consume(partial, has_speech))
         if self._state == ConversationState.ACCUMULATING:
-            self._append_to_conversation(window)
+            recordings.append(self._finalize())
+        return recordings
 
-            if has_speech:
-                self._consecutive_silent_windows = 0
-            else:
-                self._consecutive_silent_windows += 1
-                logger.debug(
-                    "Silent window %d/%d in ACCUMULATING state.",
-                    self._consecutive_silent_windows,
-                    self._silence_windows_eoc,
-                )
+    def reset(self, started_at: datetime) -> None:
+        """Explicitly discard all pending samples and start a new stream clock."""
+        if started_at.tzinfo is None or started_at.utcoffset() is None:
+            raise ValueError("started_at must include a timezone")
+        self._clear_conversation()
+        self._partial = np.empty(0, dtype=np.float32)
+        self._samples_seen = 0
+        self._started_at = started_at
 
-            # End-of-conversation: enough consecutive silence.
-            if self._consecutive_silent_windows >= self._silence_windows_eoc:
-                logger.info(
-                    "End-of-conversation detected after %.1fs of speech.",
-                    self.conversation_duration_seconds,
-                )
-                return self._finalize_conversation()
-
-            # Buffer overflow guard: process immediately, then reset.
-            if self._conversation_sample_count >= MAX_CONVERSATION_SAMPLES:
-                logger.info(
-                    "Conversation buffer full (%.0fs) — processing now.",
-                    MAX_CONVERSATION_SAMPLES / self._sample_rate,
-                )
-                return self._finalize_conversation()
-
-            return []
-
-        return []  # Should not be reached (PROCESSING is transient).
-
-    def _append_to_conversation(self, window: np.ndarray) -> None:
-        self._conversation_buffer.append(window)
-        self._conversation_sample_count += len(window)
-
-    def _finalize_conversation(self) -> list[AudioSegment]:
-        """Diarize + attribute the accumulated conversation buffer.
-
-        Returns the labelled segment list and resets to IDLE.
-        """
-        self._state = ConversationState.PROCESSING
-
-        if not self._conversation_buffer:
-            self._reset()
-            return []
-
-        audio = np.concatenate(self._conversation_buffer)
-        offset_seconds = self._conversation_start_sample / self._sample_rate
-
-        logger.info(
-            "Processing conversation: %.1fs of audio (offset=%.1fs).",
-            len(audio) / self._sample_rate,
-            offset_seconds,
+    def _finalize(self) -> Recording:
+        self._needs_finalize = True
+        recording = Recording(
+            id=self._recording_id, audio_path=self._directory / f"{self._recording_id}.wav",
+            started_at=self._started_at + timedelta(seconds=self._start_sample / SAMPLE_RATE),
+            sample_count=self._count,
         )
-
-        try:
-            turns = self._diarization_engine.diarize(audio, self._sample_rate)
-
-            if not turns:
-                logger.info("Diarization returned no turns.")
-                self._reset()
-                return []
-
-            speaker_embeddings = self._diarization_engine.extract_per_speaker_embeddings(
-                audio, turns, self._sample_rate
-            )
-
-            segments = self._attributor.attribute(
-                turns=turns,
-                speaker_embeddings=speaker_embeddings,
-                enrolled_user_embedding=self._enrolled_embedding,
-                conversation_offset_seconds=offset_seconds,
-            )
-
-            logger.info(
-                "Conversation processed: %d segment(s) produced.", len(segments)
-            )
-        except Exception:
-            logger.exception("Error during conversation processing.")
-            segments = []
-
-        self._reset()
-        return segments
-
-    def _reset(self) -> None:
-        self._conversation_buffer = []
-        self._conversation_sample_count = 0
-        self._conversation_start_sample = 0
-        self._consecutive_silent_windows = 0
-        self._state = ConversationState.IDLE
-        logger.debug("Pipeline reset to IDLE.")
+        temporary = recording.audio_path.with_suffix(".wav.tmp")
+        # FLOAT avoids additional quantization of the incoming float32 samples.
+        with open(temporary, "wb") as handle:
+            os.chmod(temporary, 0o600)
+            sf.write(handle, np.concatenate(self._buffer), SAMPLE_RATE, format="WAV", subtype="FLOAT")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(recording.audio_path)
+        manifest = recording.audio_path.with_suffix(".json")
+        temporary_manifest = manifest.with_suffix(".json.tmp")
+        with open(temporary_manifest, "w") as handle:
+            os.chmod(temporary_manifest, 0o600)
+            handle.write(recording.model_dump_json(indent=2))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_manifest.replace(manifest)
+        self._clear_conversation()
+        return recording

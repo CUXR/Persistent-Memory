@@ -21,15 +21,16 @@ services:
   api:
     image: python:3.12-slim
     container_name: persistent-memory-api
-    working_dir: /app
+    working_dir: /workspace/backend
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/persistent_memory
       EMBEDDING_DIMENSION: 512
       DB_ECHO: "false"
     volumes:
-      - ./:/app
+      - ../:/workspace
     command: >
-      sh -c "pip install --no-cache-dir -r requirements.txt &&
+      sh -c "pip install --no-cache-dir -e .. -r requirements.txt &&
+      alembic upgrade head &&
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"

@@ -1,22 +1,10 @@
-# Audio pipeline requirements
-# Install: pip install -r requirements.txt
-#
-# Notes:
-#  - pyannote.audio requires an accepted HuggingFace licence for
-#    pyannote/speaker-diarization-community-1 and pyannote/embedding.
-#  - silero-vad is pulled automatically via torch.hub on first use.
-#  - CUDA-capable torch build recommended for production; CPU works for dev.
-
-# Core ML
-torch>=2.1.0
-torchaudio>=2.1.0           # needed by pyannote for audio I/O
-
-# Speaker diarization
-pyannote.audio>=3.1.0       # includes Pipeline + Inference
-
-# Scientific computing
-numpy>=1.26.0
-
-# Dev / testing only
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
+# From the repository root, inside a Python 3.12 venv:
+# pip install -r services/audio_pipeline/requirements_audio_pipeline.txt
+# Accept HF terms for Community-1 and pyannote/embedding; set HF_TOKEN.
+pyannote.audio==4.0.4
+silero-vad>=6.0,<7
+# Keep native PyTorch extensions on a compatible release set.
+# https://github.com/meta-pytorch/torchcodec#compatibility-with-torch-versions
+torch==2.8.0
+torchaudio==2.8.0
+torchcodec>=0.7,<0.8

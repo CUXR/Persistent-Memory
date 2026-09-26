@@ -1,4 +1,8 @@
 {
+  "type": "module",
+  "scripts": {
+    "test": "node --test interlocutorTracker.test.mjs"
+  },
   "devDependencies": {
     "@types/node": "^25.3.3"
   }

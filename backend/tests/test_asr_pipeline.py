@@ -9,13 +9,8 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-import sys
 
 import pytest
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.schema.asr import RawTranscription, SpeechSegment
 from app.services.asr import transcribe_segments
@@ -34,6 +29,7 @@ def _seg(
     return SpeechSegment(
         start_time=start,
         end_time=end,
+        speaker_id=speaker,
         speaker_label=speaker,  # type: ignore[arg-type]
         audio_path=audio_path,
     )
@@ -246,18 +242,21 @@ class TestPipelineEndToEnd:
             SpeechSegment(
                 start_time=0.0,
                 end_time=1.5,
+                speaker_id="user",
                 speaker_label="user",
                 audio_path=audio_path,
             ),
             SpeechSegment(
                 start_time=1.5,
                 end_time=2.5,
+                speaker_id="interlocutor",
                 speaker_label="interlocutor",
                 audio_path=audio_path,
             ),
             SpeechSegment(
                 start_time=2.5,
                 end_time=4.0,
+                speaker_id="user",
                 speaker_label="user",
                 audio_path=audio_path,
             ),

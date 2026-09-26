@@ -58,6 +58,7 @@ yarn-error.log
 # Logs
 *.log
 logs/
+recordings/
 
 # OS
 .DS_Store

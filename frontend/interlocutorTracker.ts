@@ -1,16 +1,16 @@
 // interlocutorTracker.ts
 //
-// Mock interlocutor tracker for EgoMem.
+// Interlocutor tracker driven by persistent IDs from face recognition.
 //
 // - Loads wearer_person_id from wearer_state on startup
-// - Polls every 2s for a (mock) interlocutor identity
+// - Polls every 2s for the current face-recognition person ID
 // - Debounces identity switches (requires N consecutive polls; default 2)
 // - On confirmed change, refreshes active Level-1 interlocutor context via get_profile_context(person_id)
 // - Emits `interlocutor_changed` event
 //
 // Notes:
 // - Wearer identity is fixed; only the interlocutor is tracked.
-// - Mock identity comes from an in-memory timeline (replace later with AV recognition).
+// - The recognition source must return a persisted person ID, including for unknown faces.
 
 import { EventEmitter } from "events";
 
@@ -20,7 +20,6 @@ export type Level1InterlocutorContext = unknown;
 export type GetProfileContextFn = (personId: string) => Promise<Level1InterlocutorContext>;
 
 /** Minimal wearer_state contract. */
-/** TODO: Need to implement the wearer state so the polling can actually grab this info */
 export type WearerState = { wearer_person_id: string };
 
 export type WearerStateLoader = () => Promise<WearerState> | WearerState;
@@ -36,93 +35,19 @@ export type InterlocutorTrackerEvents = {
   error: (err: Error) => void;
 };
 
-/** A single mock identity change point. `atMs` is time since tracker start. */
-export type MockIdentityPoint = { atMs: number; personId: string | null };
-
-/**
- * In-memory identity timeline:
- * - The "current" personId is the last point whose atMs <= elapsedMs.
- */
-export class MockInterlocutorStream {
-  private readonly timeline: MockIdentityPoint[];
-  private readonly defaultPersonId: string | null;
-
-  constructor(timeline: MockIdentityPoint[], defaultPersonId: string | null = null) {
-    this.timeline = [...timeline].sort((a, b) => a.atMs - b.atMs);
-    this.defaultPersonId = defaultPersonId;
-  }
-
-  getCurrentPersonId(elapsedMs: number): string | null {
-    if (this.timeline.length === 0) return this.defaultPersonId;
-
-    let current: string | null = this.defaultPersonId;
-    for (const point of this.timeline) {
-      if (point.atMs <= elapsedMs) current = point.personId;
-      else break;
-    }
-    return current;
-  }
-}
-
 export type InterlocutorTrackerOptions = {
   pollIntervalMs?: number; // default 2000
   debounceConsecutivePolls?: number; // default 2
-  mockStream?: MockInterlocutorStream;
+  // The face recognizer persists unknown faces before returning their IDs.
+  getCurrentPersonId: () => Promise<string | null> | string | null;
 
-  // Dependency injection (recommended for tests)
-  // TODO: Need to implement the getProfileContext function so that the tracker can actually fetch the profile context for the interlocutor
-  getProfileContext?: GetProfileContextFn;
-  loadWearerState?: WearerStateLoader;
+  // Application adapters supply the owner and backend memory context.
+  getProfileContext: GetProfileContextFn;
+  loadWearerState: WearerStateLoader;
 };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Attempts to load wearer_state + get_profile_context from local modules if not provided.
- * This avoids hard-coding your repo layout, while still “just working” in many setups.
- */
-async function defaultLoadWearerState(): Promise<WearerState> {
-  // Try common patterns:
-  // 1) exported const wearer_state
-  // 2) exported function getWearerState()
-  // 3) JSON file wearer_state.json
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require("./wearer_state");
-    if (mod?.wearer_state?.wearer_person_id) return mod.wearer_state as WearerState;
-    if (typeof mod?.getWearerState === "function") return await mod.getWearerState();
-  } catch {
-    // ignore
-  }
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const json = require("./wearer_state.json");
-    if (json?.wearer_person_id) return json as WearerState;
-  } catch {
-    // ignore
-  }
-
-  throw new Error(
-    "Failed to load wearer_state. Provide options.loadWearerState or ensure ./wearer_state(.ts) or ./wearer_state.json exists."
-  );
-}
-
-function defaultGetProfileContext(): GetProfileContextFn {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require("./get_profile_context");
-    if (typeof mod?.get_profile_context === "function") return mod.get_profile_context as GetProfileContextFn;
-    if (typeof mod?.getProfileContext === "function") return mod.getProfileContext as GetProfileContextFn;
-  } catch {
-    // ignore
-  }
-
-  throw new Error(
-    "Failed to load get_profile_context. Provide options.getProfileContext or ensure ./get_profile_context(.ts) exports get_profile_context()."
-  );
 }
 
 export class InterlocutorTracker extends EventEmitter {
@@ -136,12 +61,11 @@ export class InterlocutorTracker extends EventEmitter {
 
   private readonly pollIntervalMs: number;
   private readonly debounceConsecutivePolls: number;
-  private readonly mockStream: MockInterlocutorStream;
+  private readonly getCurrentPersonId: InterlocutorTrackerOptions["getCurrentPersonId"];
 
   private readonly getProfileContext: GetProfileContextFn;
   private readonly loadWearerState: WearerStateLoader;
 
-  private startedAtMs: number = 0;
   private running = false;
 
   // Debounce state
@@ -151,29 +75,19 @@ export class InterlocutorTracker extends EventEmitter {
   // Prevent overlapping refresh calls if polling interval is shorter than fetch time
   private refreshInFlight: Promise<void> | null = null;
 
-  constructor(options: InterlocutorTrackerOptions = {}) {
+  constructor(options: InterlocutorTrackerOptions) {
     super();
 
     this.pollIntervalMs = options.pollIntervalMs ?? 2000;
     this.debounceConsecutivePolls = options.debounceConsecutivePolls ?? 2;
 
-    this.mockStream =
-      options.mockStream ??
-      new MockInterlocutorStream(
-        [
-          // Default mock timeline (safe, deterministic).
-          // Replace/override in tests or app bootstrap.
-          { atMs: 0, personId: null },
-          { atMs: 5_000, personId: "person_alice" },
-          { atMs: 25_000, personId: "person_bob" },
-          { atMs: 45_000, personId: "person_alice" },
-          { atMs: 65_000, personId: null },
-        ],
-        null
-      );
-
-    this.getProfileContext = options.getProfileContext ?? defaultGetProfileContext();
-    this.loadWearerState = options.loadWearerState ?? defaultLoadWearerState;
+    if (!Number.isFinite(this.pollIntervalMs) || this.pollIntervalMs <= 0 ||
+        !Number.isInteger(this.debounceConsecutivePolls) || this.debounceConsecutivePolls < 1) {
+      throw new Error("Invalid polling or debounce configuration");
+    }
+    this.getCurrentPersonId = options.getCurrentPersonId;
+    this.getProfileContext = options.getProfileContext;
+    this.loadWearerState = options.loadWearerState;
   }
 
   /**
@@ -191,7 +105,8 @@ export class InterlocutorTracker extends EventEmitter {
     this.wearer_person_id = wearerState.wearer_person_id;
 
     this.running = true;
-    this.startedAtMs = Date.now();
+    this.candidateId = null;
+    this.candidateCount = 0;
 
     // Kick off loop without awaiting it (but ensure it can't throw unhandled).
     void this.pollLoop().catch((err) => {
@@ -208,10 +123,10 @@ export class InterlocutorTracker extends EventEmitter {
     this.refreshInFlight = null;
   }
 
-  /** Single poll tick: read mock identity + debounce + maybe apply switch. */
+  /** Single poll tick: read persisted identity + debounce + maybe apply switch. */
   private async pollOnce(): Promise<void> {
-    const elapsed = Date.now() - this.startedAtMs;
-    const observedId = this.mockStream.getCurrentPersonId(elapsed);
+    const observedId = await this.getCurrentPersonId();
+    if (!this.running) return;
 
     // If observed matches current active, clear debounce state.
     if (observedId === this.activeInterlocutorPersonId) {
@@ -224,10 +139,9 @@ export class InterlocutorTracker extends EventEmitter {
     if (observedId !== this.candidateId) {
       this.candidateId = observedId;
       this.candidateCount = 1;
-      return;
+    } else {
+      this.candidateCount += 1;
     }
-
-    this.candidateCount += 1;
 
     if (this.candidateCount < this.debounceConsecutivePolls) return;
 
@@ -255,7 +169,9 @@ export class InterlocutorTracker extends EventEmitter {
     this.refreshInFlight = (async () => {
       // Update active id first (so readers stop using old context ASAP),
       // then update context. If fetch fails, we revert id+context.
+      const previousContext = this.activeLevel1InterlocutorContext;
       this.activeInterlocutorPersonId = newPersonId;
+      this.activeLevel1InterlocutorContext = null;
 
       if (newPersonId === null) {
         this.activeLevel1InterlocutorContext = null;
@@ -273,6 +189,7 @@ export class InterlocutorTracker extends EventEmitter {
       } catch (e) {
         // Revert on failure (prevents “active id changed but context missing”)
         this.activeInterlocutorPersonId = prev;
+        this.activeLevel1InterlocutorContext = previousContext;
         throw e;
       }
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime, timezone
 import logging
 from decimal import Decimal
@@ -82,7 +81,7 @@ class MemoryStore:
         self._owner_user_id = owner_user_id
         self._engine: Optional[Engine] = None
         self._Session: Optional[sessionmaker[Session]] = None
-        logger.info("MemoryStore created (db_url=%s, owner=%s)", self._db_url, owner_user_id)
+        logger.info("MemoryStore created (owner=%s)", owner_user_id)
 
     @property
     def owner_user_id(self) -> UUID:
@@ -203,6 +202,12 @@ class MemoryStore:
             )
             logger.debug("list_people: %d people for owner=%s", len(people), self._owner_user_id)
             return people
+
+    def get_person(self, person_id: UUID) -> PersonOut:
+        """Load an explicitly selected person within the current owner scope."""
+        with self.Session() as session:
+            self._assert_person_exists(session, person_id, self._owner_user_id)
+            return self._load_person(session, person_id)
 
     def resolve_person_by_name(self, text: str) -> Optional[PersonOut]:
         """Resolve a person by display name for the current owner.
@@ -458,6 +463,7 @@ class MemoryStore:
         """
 
         with self.Session() as session:
+            self._assert_person_exists(session, person_id, self._owner_user_id)
             rows = session.execute(
                 select(PersonFact.fact_category, PersonFact.fact_text)
                 .where(

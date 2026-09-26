@@ -131,8 +131,14 @@ def merge_adjacent_turns(
             continue
         prev = group[-1]
         gap = t.segment.start_time - prev.segment.end_time
-        same_speaker = t.segment.speaker_label == prev.segment.speaker_label
-        if same_speaker and gap <= max_gap_seconds:
+        same_speaker = (
+            t.segment.speaker_id == prev.segment.speaker_id
+            and t.segment.speaker_label == prev.segment.speaker_label
+            and t.segment.person_id == prev.segment.person_id
+            and t.segment.attribution_method == prev.segment.attribution_method
+            and t.segment.audio_path == prev.segment.audio_path
+        )
+        if same_speaker and 0 <= gap <= max_gap_seconds:
             group.append(t)
         else:
             flush()
@@ -147,6 +153,10 @@ def _group_to_turn(group: list[RawTranscription]) -> DialogTurn:
     mean_prob = sum(math.exp(t.avg_logprob) for t in group) / len(group)
     return DialogTurn(
         speaker=group[0].segment.speaker_label,
+        speaker_id=group[0].segment.speaker_id,
+        attribution_method=group[0].segment.attribution_method,
+        person_id=group[0].segment.person_id,
+        speaker_similarity=group[0].segment.speaker_similarity,
         text=text,
         start_time=group[0].segment.start_time,
         end_time=group[-1].segment.end_time,

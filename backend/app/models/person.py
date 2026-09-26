@@ -10,6 +10,7 @@ from sqlalchemy.types import JSON
 
 from ..core.config import get_settings
 from ..core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from .voice import VOICE_VECTOR_TYPE
 
 settings = get_settings()
 
@@ -42,7 +43,7 @@ class Person(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     face_embedding: Mapped[list[float] | None] = mapped_column(VECTOR_TYPE, nullable=True)
-    voice_embedding: Mapped[list[float] | None] = mapped_column(VECTOR_TYPE, nullable=True)
+    voice_embedding: Mapped[list[float] | None] = mapped_column(VOICE_VECTOR_TYPE, nullable=True)
     face_embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     voice_embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     face_key: Mapped[str | None] = mapped_column(String(255), nullable=True)

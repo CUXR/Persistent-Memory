@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from ..core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from .voice import VOICE_VECTOR_TYPE
 
 if TYPE_CHECKING:
     from .episode import Episode
@@ -30,6 +31,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     oauth_provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
     oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     preferences: Mapped[dict[str, Any]] = mapped_column(PREFERENCES_TYPE, nullable=False, default=dict)
+    voice_embedding: Mapped[list[float] | None] = mapped_column(VOICE_VECTOR_TYPE, nullable=True)
+    voice_embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     facts: Mapped[list["UserFact"]] = relationship(
         back_populates="user",

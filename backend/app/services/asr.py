@@ -15,8 +15,8 @@ orchestrator can be tested with stubs and the real ``WhisperEngine`` stays
 out of the assembly/orchestration test suite (no model load).
 
 Failure policy lives here, not in the engine. Per-segment ASR exceptions
-are logged and the failing segment is skipped — one bad segment does not
-abort transcription of the rest of the conversation.
+are retained on Dialog.errors, alongside any successful turns. The memory
+coordinator will not extract facts from an incomplete transcript.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from app.schema.asr import Dialog, RawTranscription, SpeechSegment
+from app.schema.asr import Dialog, RawTranscription, SpeechSegment, TranscriptionFailure
 from app.services.asr_assembly import (
     MAX_MERGE_GAP_SECONDS,
     filter_empty_or_silent,
@@ -56,32 +56,34 @@ def transcribe_segments(
     """Transcribe and assemble speaker-labeled segments into a ``Dialog``.
 
     Args:
-        segments: Chronologically ordered speaker-labeled audio segments
-            from the VAD/diarization pipeline (issue #23). Order is
-            preserved through the pipeline; window-boundary stitching is
-            assumed to have already happened upstream.
+        segments: Speaker-labeled segments from one finalized recording,
+            sorted here by recording-relative start time.
         engine: Any object implementing the ``ASREngine`` protocol.
         max_gap_seconds: Override the default same-speaker merge gap.
 
     Returns:
         ``Dialog`` containing zero or more ``DialogTurn`` entries. Empty
-        input, all-silent input, and all-failed input each yield
-        ``Dialog(turns=[])`` rather than raising.
+        input and all-silent input yield an empty dialog. Failed segments
+        are reported in errors and can be retried from the retained WAV.
     """
     if not segments:
         return Dialog(turns=[])
 
     raw: list[RawTranscription] = []
-    for segment in segments:
+    failures: list[TranscriptionFailure] = []
+    for segment in sorted(segments, key=lambda segment: segment.start_time):
         try:
             raw.append(engine.transcribe(segment))
-        except Exception:  # noqa: BLE001 — policy is "log and skip"
+        except Exception as exc:
+            failures.append(TranscriptionFailure(segment=segment, error=str(exc)))
             logger.exception(
-                "ASR engine failed on segment [%.3f, %.3f] in %s; skipping.",
+                "ASR engine failed on segment [%.3f, %.3f] in %s; error retained.",
                 segment.start_time,
                 segment.end_time,
                 segment.audio_path,
             )
 
     surviving = filter_empty_or_silent(raw)
-    return merge_adjacent_turns(surviving, max_gap_seconds=max_gap_seconds)
+    dialog = merge_adjacent_turns(surviving, max_gap_seconds=max_gap_seconds)
+    dialog.errors = failures
+    return dialog

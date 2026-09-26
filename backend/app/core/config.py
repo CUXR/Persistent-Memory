@@ -1,4 +1,7 @@
 from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,17 +28,21 @@ class Settings(BaseSettings):
     database_url: str  # e.g. postgresql+psycopg://user:pass@host:5432/db
 
     # ------------------------------------------------------------------ #
-    # Embeddings                                                           #
+    # Face embeddings (voice embeddings use a fixed model dimension)       #
     # ------------------------------------------------------------------ #
     embedding_dimension: int = 512
     db_echo: bool = False
 
     # ------------------------------------------------------------------ #
-    # OpenAI / LLM — api key required; model and retries have defaults    #
+    # Model processing — keys are required only by the relevant service     #
     # ------------------------------------------------------------------ #
-    openai_api_key: str  # required — set OPENAI_API_KEY in .env
+    openai_api_key: str | None = None  # required only when extracting memories
     openai_model: str = "gpt-4o-mini"
     openai_max_retries: int = 2
+    hf_token: str | None = None
+    recording_directory: Path = Path("recordings")
+    voice_match_threshold: float = Field(default=0.75, ge=0, le=1)
+    voice_match_margin: float = Field(default=0.15, gt=0, le=2)
 
     model_config = SettingsConfigDict(
         env_file=".env",

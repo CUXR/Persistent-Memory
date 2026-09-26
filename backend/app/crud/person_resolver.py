@@ -37,8 +37,7 @@ class PersonResolver:
 
     Given a query such as "what did Bob say last week", determines which
     person in the memory store is being referenced. When multiple people
-    match, returns candidates with categorized fact hints for disambiguation
-    by a downstream model (GPT 5 nano).
+    match, returns candidates with categorized fact hints for disambiguation.
     """
 
     def __init__(self, store: MemoryStore) -> None:

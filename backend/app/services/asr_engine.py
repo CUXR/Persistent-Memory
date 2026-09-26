@@ -11,7 +11,7 @@ Design notes:
     loaded on first transcribe() call. This lets test modules import the
     class without paying ~460MB.
   - Audio is loaded into a numpy array once per file and cached on the
-    engine instance (FIFO, bounded). For a typical conversation ingestion —
+    engine instance (LRU, bounded). For a typical conversation ingestion —
     many segments, one audio_path — this avoids re-reading the WAV per
     segment.
   - faster-whisper internally chunks input into ~30s windows and may return
@@ -32,14 +32,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from app.schema.asr import RawTranscription, SpeechSegment
+from audio_pipeline.segment import SAMPLE_RATE
 
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
 
 logger = logging.getLogger("app.services.asr_engine")
-
-# Input audio is mono 16 kHz per the contract from #23.
-SAMPLE_RATE = 16_000
 
 # Default audio cache size — bounds the engine's RAM footprint when called
 # across multiple conversation files. A 10-minute mono 16 kHz float32 file
@@ -71,7 +69,7 @@ class WhisperEngine:
         self._beam_size = beam_size
         self._cache_size = audio_cache_size
         self._model: "WhisperModel | None" = None
-        # OrderedDict gives FIFO eviction with O(1) ops.
+        # OrderedDict gives LRU eviction with O(1) ops.
         self._audio_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
 
     # ── Public API ───────────────────────────────────────────
@@ -159,7 +157,7 @@ class WhisperEngine:
 
         self._audio_cache[key] = samples
         while len(self._audio_cache) > self._cache_size:
-            self._audio_cache.popitem(last=False)  # FIFO eviction
+            self._audio_cache.popitem(last=False)  # LRU eviction
         return samples
 
     @staticmethod
@@ -170,6 +168,8 @@ class WhisperEngine:
         are int(t * SAMPLE_RATE)."""
         start_sample = int(start_time * SAMPLE_RATE)
         end_sample = int(end_time * SAMPLE_RATE)
+        if start_sample < 0 or end_sample > len(audio):
+            raise ValueError("ASR segment outside recording")
         return audio[start_sample:end_sample]
 
     @staticmethod

@@ -11,7 +11,6 @@ logic.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from openai import AsyncOpenAI
 
@@ -20,9 +19,6 @@ from ..schema.ingestion import (
     EpisodeSummaryLLMResponse,
     FactExtractionLLMResponse,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("app.services.llm_client")
 
@@ -92,6 +88,8 @@ class LLMClient:
         max_retries: int | None = None,
     ) -> None:
         settings = get_settings()
+        if not (api_key or settings.openai_api_key):
+            raise ValueError("OPENAI_API_KEY is required for memory extraction")
         self._model = model or settings.openai_model
         self._client = AsyncOpenAI(
             api_key=api_key or settings.openai_api_key,

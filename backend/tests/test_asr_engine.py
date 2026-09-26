@@ -17,14 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 
 import numpy as np
 import pytest
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.schema.asr import SpeechSegment
 from app.services.asr_engine import (
@@ -239,6 +234,7 @@ class TestWhisperIntegration:
         segment = SpeechSegment(
             start_time=0.0,
             end_time=2.0,
+            speaker_id="user",
             speaker_label="user",
             audio_path=audio_path,
         )

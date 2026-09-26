@@ -1,113 +1,87 @@
-"""Output contract for the audio segmentation pipeline.
-
-Every downstream consumer (ASR, ingestion) works exclusively against
-``AudioSegment`` objects produced by this module.  Nothing upstream should
-leak raw pyannote or torch types through the public surface.
-
-Sample-index convention
------------------------
-Audio is assumed to be **mono PCM float32 at SAMPLE_RATE Hz** throughout the
-pipeline.  The ``start_sample`` / ``end_sample`` fields are integer offsets
-into the flat 1-D numpy array that represents the full conversation recording.
-To recover the raw waveform slice for a segment:
-
-    waveform_slice = conversation_audio[seg.start_sample : seg.end_sample]
-
-This is equivalent to ``seg.audio_slice(conversation_audio)``.
-"""
-
+"""Shared recording, speaker, and segment contracts used through ASR."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
+from uuid import UUID, uuid4
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Expected sample rate throughout the pipeline (Hz).
-SAMPLE_RATE: int = 16_000
-
-# Rolling VAD window length in seconds.
-VAD_WINDOW_SECONDS: float = 5.0
-
-# Maximum conversation accumulation buffer length in seconds (~10 min).
-MAX_CONVERSATION_SECONDS: float = 600.0
-
-# Number of consecutive silent VAD windows that signals end-of-conversation.
-SILENCE_WINDOWS_EOC: int = 2
-
-# Samples per VAD window.
-VAD_WINDOW_SAMPLES: int = int(VAD_WINDOW_SECONDS * SAMPLE_RATE)
-
-# Samples per conversation window ceiling.
-MAX_CONVERSATION_SAMPLES: int = int(MAX_CONVERSATION_SECONDS * SAMPLE_RATE)
-
-SpeakerLabel = Literal["user", "interlocutor", "uncertain"]
+SAMPLE_RATE = 16_000
+VOICE_MODEL = "pyannote/embedding"
+VOICE_DIMENSION = 512
+SpeakerLabel = Literal["user", "interlocutor", "unknown"]
+AttributionMethod = Literal["voice_match", "conversation", "unknown"]
 
 
-@dataclass
-class AudioSegment:
-    """One speaker-labeled speech segment within a conversation.
+def validate_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    if sample_rate != SAMPLE_RATE:
+        raise ValueError("Audio must be normalized to 16 kHz before capture")
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim != 1 or not np.isfinite(audio).all():
+        raise ValueError("Audio must be finite mono PCM")
+    return audio
 
-    Attributes:
-        start_time:     Seconds from the start of the conversation recording.
-        end_time:       Seconds from the start of the conversation recording.
-        speaker_label:  ``"user"`` (the wearer), ``"interlocutor"`` (the other
-                        party), or ``"uncertain"`` when similarity scoring is
-                        inconclusive.
-        start_sample:   Integer sample index into the conversation audio array.
-                        Always ``int(start_time * SAMPLE_RATE)``.
-        end_sample:     Integer sample index (exclusive upper bound).
-                        Always ``int(end_time * SAMPLE_RATE)``.
-        confidence:     Cosine-similarity score used for attribution, in [0, 1].
-                        ``0.0`` for ``"uncertain"`` segments.
-        speaker_id:     Raw diarization speaker label (e.g. ``"SPEAKER_00"``).
-                        Useful for debugging; not meaningful across conversations.
-    """
 
-    start_time: float
-    end_time: float
-    speaker_label: SpeakerLabel
-    start_sample: int
-    end_sample: int
-    confidence: float
-    speaker_id: str = ""
+class VoiceProfile(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model: str = Field(min_length=1, max_length=100)
+    embedding: list[float] = Field(min_length=VOICE_DIMENSION, max_length=VOICE_DIMENSION)
 
-    # ------------------------------------------------------------------
-    def audio_slice(self, conversation_audio: np.ndarray) -> np.ndarray:
-        """Return the raw waveform for this segment.
-
-        Args:
-            conversation_audio: 1-D float32 array for the full conversation
-                at :data:`SAMPLE_RATE` Hz.
-
-        Returns:
-            A numpy view (or copy if out-of-bounds) of the segment audio.
-        """
-        return conversation_audio[self.start_sample : self.end_sample]
-
-    # ------------------------------------------------------------------
+    @field_validator("embedding")
     @classmethod
-    def from_times(
-        cls,
-        start_time: float,
-        end_time: float,
-        speaker_label: SpeakerLabel,
-        confidence: float,
-        speaker_id: str = "",
-    ) -> "AudioSegment":
-        """Convenience constructor that derives sample indices from timestamps."""
-        return cls(
-            start_time=start_time,
-            end_time=end_time,
-            speaker_label=speaker_label,
-            start_sample=int(start_time * SAMPLE_RATE),
-            end_sample=int(end_time * SAMPLE_RATE),
-            confidence=confidence,
-            speaker_id=speaker_id,
-        )
+    def normalize(cls, value: list[float]) -> list[float]:
+        vector = np.asarray(value, dtype=np.float64)
+        norm = np.linalg.norm(vector)
+        if not np.isfinite(vector).all() or not np.isfinite(norm) or norm < 1e-10:
+            raise ValueError("Voice embedding must be finite and nonzero")
+        return (vector / norm).tolist()
 
-    def __repr__(self) -> str:
-        return (
-            f"AudioSegment({self.start_time:.2f}s–{self.end_time:.2f}s "
-            f"[{self.speaker_label}] conf={self.confidence:.3f})"
-        )
+
+class DiscoveredVoice(BaseModel):
+    """A new voice learned from this recording, not an independent identity match."""
+    speaker_id: str
+    profile: VoiceProfile
+
+
+class Recording(BaseModel):
+    """Immutable WAV reference. All segment times are relative to this file."""
+    model_config = ConfigDict(frozen=True)
+    id: UUID = Field(default_factory=uuid4)
+    audio_path: Path
+    started_at: datetime
+    sample_rate: Literal[16000] = SAMPLE_RATE
+    sample_count: int = Field(gt=0)
+
+    @field_validator("started_at")
+    @classmethod
+    def timezone_required(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("recording start must include a timezone")
+        return value
+
+    @property
+    def duration(self) -> float:
+        return self.sample_count / self.sample_rate
+
+
+class SpeechSegment(BaseModel):
+    """One diarized turn; identity and raw similarity survive transcription."""
+    start_time: float = Field(ge=0, allow_inf_nan=False)
+    end_time: float = Field(gt=0, allow_inf_nan=False)
+    audio_path: Path
+    speaker_id: str = Field(min_length=1)
+    speaker_label: SpeakerLabel
+    attribution_method: AttributionMethod = "unknown"
+    speaker_similarity: float | None = Field(default=None, ge=-1, le=1)
+    person_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def ordered(self) -> "SpeechSegment":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be greater than start_time")
+        if self.speaker_label != "interlocutor" and self.person_id is not None:
+            raise ValueError("Only an identified interlocutor can carry person_id")
+        return self
