@@ -1,5 +1,7 @@
 from functools import lru_cache
+import json
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +38,40 @@ class Settings(BaseSettings):
     retrieval_reranker_top_k: int = 20
     retrieval_reranker_min_score: float = 0.0
     db_echo: bool = False
+
+    # ------------------------------------------------------------------ #
+    # Memory browser API (frontend integration)                           #
+    # ------------------------------------------------------------------ #
+    # Local development only: when true, requests may identify the owner
+    # through the ``X-User-Id`` header, or fall back to the single existing
+    # user when no header is sent. Never enable this on a shared deployment;
+    # the real session middleware sets ``request.state.user_id`` instead.
+    allow_dev_auth_fallback: bool = False
+    # Browser origins allowed to call the API. Accepts a JSON list or a
+    # comma-separated string, e.g. ``http://localhost:5173,http://127.0.0.1:5173``.
+    cors_allowed_origins: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                return json.loads(stripped)
+            return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+        return value
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def _reject_wildcard_origin(cls, value: list[str]) -> list[str]:
+        if "*" in value:
+            raise ValueError(
+                "cors_allowed_origins must list explicit origins; '*' is not allowed with credentials"
+            )
+        return value
 
     # ------------------------------------------------------------------ #
     # OpenAI / LLM — api key required; model and retries have defaults    #

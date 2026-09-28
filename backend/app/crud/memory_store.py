@@ -9,14 +9,20 @@ from uuid import UUID
 from sqlalchemy import create_engine, delete, func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased, sessionmaker
+from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
 from ..core.config import get_settings
-from ..core.database import Base
+from ..core.database import Base, make_session_factory
 from ..models.episode import Episode
 from ..models.memory import Alias, Edge, EpisodeParticipant, Pref, Summary
 from ..models.person import Person, PersonFact
 from ..models.user import User, UserFact
+from ..schema.browser import (
+    ConversationDetailOut,
+    ConversationParticipantOut,
+    PersonListItemOut,
+    RecentConversationOut,
+)
 from ..schema.memory import (
     EdgeIn,
     EdgeOut,
@@ -38,13 +44,23 @@ settings = get_settings()
 # Priority order for categorized facts used to build resolver hints.
 FACT_CATEGORY_PRIORITY = ("visual_descriptor", "affiliation", "hobby")
 
+# Number of most recent facts surfaced on people-list cards.
+TOP_FACTS_PER_PERSON = 2
 
-def _iso(dt: Optional[datetime]) -> Optional[str]:
+
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Treat naive datetimes (as SQLite returns them) as UTC so they compare safely."""
+
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc).isoformat()
-    return dt.isoformat()
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    normalized = _as_utc(dt)
+    return None if normalized is None else normalized.isoformat()
 
 
 def _decimal(value: float | None) -> Decimal | None:
@@ -65,6 +81,12 @@ def _split_name(name: str) -> tuple[str, str, str]:
     first_name = parts[0]
     last_name = parts[1] if len(parts) > 1 else ""
     return first_name, last_name, cleaned
+
+
+def _display_name(display_name: str | None, first_name: str, last_name: str) -> str:
+    if display_name:
+        return display_name
+    return f"{first_name} {last_name}".strip()
 
 
 class MemoryStore:
@@ -98,6 +120,21 @@ class MemoryStore:
         if create_schema:
             Base.metadata.create_all(self._engine)
         logger.info("Database initialized")
+
+    @classmethod
+    def from_engine(cls, engine: Engine, owner_user_id: UUID) -> "MemoryStore":
+        """Create a request-scoped store that reuses an existing SQLAlchemy engine.
+
+        An explicit owner is required so API code can never fall through to the
+        implicit "first or newly created user" owner resolution.
+        """
+
+        if owner_user_id is None:
+            raise ValueError("from_engine requires an explicit owner_user_id")
+        store = cls(str(engine.url), owner_user_id=owner_user_id)
+        store._engine = engine
+        store._Session = make_session_factory(engine)
+        return store
 
     def close(self) -> None:
         """Dispose the SQLAlchemy engine and clear the session factory."""
@@ -191,7 +228,10 @@ class MemoryStore:
                 owner = self._get_or_create_owner(session)
                 people = list(
                     session.scalars(
-                        select(Person).where(Person.user_id == owner.id).order_by(Person.created_at.asc())
+                        select(Person)
+                        .options(selectinload(Person.aliases))
+                        .where(Person.user_id == owner.id)
+                        .order_by(Person.created_at.asc())
                     ).all()
                 )
             return people
@@ -285,7 +325,13 @@ class MemoryStore:
                 session.add(episode)
                 session.flush()
 
+                seen_at = _as_utc(data.time_end or data.time_start)
                 for participant_id in ordered_participants:
+                    participant = session.get(Person, participant_id)
+                    if participant is not None:
+                        previous = _as_utc(participant.last_seen_at)
+                        if previous is None or previous < seen_at:
+                            participant.last_seen_at = seen_at
                     session.add(EpisodeParticipant(episode_id=episode.id, person_id=participant_id))
 
                 episode_id = episode.id
@@ -607,6 +653,227 @@ class MemoryStore:
                 edges_from=edges,
                 persona90=person.persona90 or [],
             )
+
+    def list_recent_conversations(self, limit: int = 20) -> list[RecentConversationOut]:
+        """Return recent episode summaries for the current owner user."""
+
+        if limit <= 0:
+            raise ValueError("limit must be >= 1")
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                episodes = list(
+                    session.scalars(
+                        select(Episode)
+                        .where(Episode.user_id == owner.id)
+                        .order_by(Episode.start_time.desc(), Episode.created_at.desc(), Episode.id.asc())
+                        .limit(limit)
+                    ).all()
+                )
+
+                if not episodes:
+                    return []
+
+                participants_by_episode = self._load_episode_participants(session, episodes, owner.id)
+
+            return [
+                RecentConversationOut(
+                    id=episode.id,
+                    started_at=_iso(episode.start_time) or "",
+                    ended_at=_iso(episode.end_time),
+                    summary=episode.dialogue_summary or "",
+                    participants=[
+                        ConversationParticipantOut(id=person_id, name=name)
+                        for person_id, name in participants_by_episode.get(episode.id, [])
+                    ],
+                )
+                for episode in episodes
+            ]
+
+    def get_conversation_detail(self, episode_id: UUID) -> ConversationDetailOut:
+        """Return one episode with its transcript and participant overview cards."""
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                episode = session.scalar(
+                    select(Episode).where(Episode.id == episode_id, Episode.user_id == owner.id)
+                )
+                if episode is None:
+                    raise ValueError(f"Episode id={episode_id} not found")
+
+                participants = self._load_episode_participants(session, [episode], owner.id).get(episode.id, [])
+                participant_ids = [person_id for person_id, _ in participants]
+                cards = self._build_people_overview(session, owner.id, person_ids=participant_ids, limit=None)
+
+            cards_by_id = {card.id: card for card in cards}
+            return ConversationDetailOut(
+                id=episode.id,
+                started_at=_iso(episode.start_time) or "",
+                ended_at=_iso(episode.end_time),
+                summary=episode.dialogue_summary or "",
+                transcript=episode.transcript or "",
+                participants=[cards_by_id[pid] for pid in participant_ids if pid in cards_by_id],
+            )
+
+    def get_person(self, person_id: UUID) -> PersonOut:
+        """Return one stored person record for the current owner user."""
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                self._assert_person_exists(session, person_id, owner.id)
+            return self._load_person(session, person_id)
+
+    def list_people_overview(
+        self,
+        limit: int | None = 100,
+        person_ids: Optional[list[UUID]] = None,
+    ) -> list[PersonListItemOut]:
+        """Return lightweight people-list cards for the current owner user.
+
+        Cards are ordered most-recently-seen first. When ``person_ids`` is given
+        only those people are returned; ids that do not belong to the owner are
+        silently skipped. ``limit=None`` returns every matching person.
+        """
+
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be >= 1")
+
+        with self.Session() as session:
+            with session.begin():
+                owner = self._get_or_create_owner(session)
+                return self._build_people_overview(session, owner.id, person_ids=person_ids, limit=limit)
+
+    def _load_episode_participants(
+        self,
+        session: Session,
+        episodes: list[Episode],
+        owner_id: UUID,
+    ) -> dict[UUID, list[tuple[UUID, str]]]:
+        """Return owner-scoped ``(person_id, name)`` participants per episode.
+
+        Ordering is deterministic: the episode's primary person first, then the
+        remaining participants by link time, name, and id.
+        """
+
+        episode_ids = [episode.id for episode in episodes]
+        primary_by_episode = {episode.id: episode.person_id for episode in episodes}
+        rows = session.execute(
+            select(
+                EpisodeParticipant.episode_id,
+                EpisodeParticipant.created_at,
+                Person.id,
+                Person.display_name,
+                Person.first_name,
+                Person.last_name,
+            )
+            .join(Person, Person.id == EpisodeParticipant.person_id)
+            .where(
+                EpisodeParticipant.episode_id.in_(episode_ids),
+                Person.user_id == owner_id,
+            )
+        ).all()
+
+        grouped: dict[UUID, list[tuple]] = {episode_id: [] for episode_id in episode_ids}
+        for episode_id, linked_at, person_id, display_name, first_name, last_name in rows:
+            name = _display_name(display_name, first_name, last_name)
+            is_primary = primary_by_episode.get(episode_id) == person_id
+            grouped[episode_id].append((0 if is_primary else 1, linked_at, name.lower(), str(person_id), person_id, name))
+
+        return {
+            episode_id: [(person_id, name) for _, _, _, _, person_id, name in sorted(items, key=lambda row: row[:4])]
+            for episode_id, items in grouped.items()
+        }
+
+    def _build_people_overview(
+        self,
+        session: Session,
+        owner_id: UUID,
+        *,
+        person_ids: Optional[list[UUID]],
+        limit: int | None,
+    ) -> list[PersonListItemOut]:
+        """Batch-load people cards (aliases, top facts, counts, last seen) in a handful of queries."""
+
+        last_seen_fallback = (
+            select(func.max(Episode.start_time))
+            .join(EpisodeParticipant, EpisodeParticipant.episode_id == Episode.id)
+            .where(EpisodeParticipant.person_id == Person.id, Episode.user_id == owner_id)
+            .correlate(Person)
+            .scalar_subquery()
+        )
+        effective_last_seen = func.coalesce(Person.last_seen_at, last_seen_fallback)
+
+        stmt = select(Person, last_seen_fallback).where(Person.user_id == owner_id)
+        if person_ids is not None:
+            unique_ids = list(dict.fromkeys(person_ids))
+            if not unique_ids:
+                return []
+            stmt = stmt.where(Person.id.in_(unique_ids))
+        stmt = stmt.order_by(
+            effective_last_seen.desc().nullslast(),
+            Person.created_at.desc(),
+            Person.id.asc(),
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+
+        people_rows = session.execute(stmt).all()
+        if not people_rows:
+            return []
+
+        people = [person for person, _ in people_rows]
+        fallback_last_seen = {person.id: seen_at for person, seen_at in people_rows}
+        ids = [person.id for person in people]
+
+        alias_rows = session.execute(
+            select(Alias.person_id, Alias.alias)
+            .where(Alias.person_id.in_(ids))
+            .order_by(Alias.alias.asc())
+        ).all()
+        fact_rows = session.execute(
+            select(PersonFact.person_id, PersonFact.fact_text)
+            .where(PersonFact.person_id.in_(ids))
+            .order_by(PersonFact.created_at.desc(), PersonFact.id.asc())
+        ).all()
+        summary_counts = dict(
+            session.execute(
+                select(Summary.person_id, func.count(Summary.id))
+                .where(Summary.person_id.in_(ids))
+                .group_by(Summary.person_id)
+            ).all()
+        )
+        edge_counts = dict(
+            session.execute(
+                select(Edge.src_id, func.count(Edge.id))
+                .where(Edge.src_id.in_(ids))
+                .group_by(Edge.src_id)
+            ).all()
+        )
+
+        aliases_by_person: dict[UUID, list[str]] = {person_id: [] for person_id in ids}
+        for person_id, alias in alias_rows:
+            aliases_by_person[person_id].append(alias)
+
+        facts_by_person: dict[UUID, list[str]] = {person_id: [] for person_id in ids}
+        for person_id, fact_text in fact_rows:
+            facts_by_person[person_id].append(fact_text)
+
+        return [
+            PersonListItemOut(
+                id=person.id,
+                name=_display_name(person.display_name, person.first_name, person.last_name),
+                aliases=aliases_by_person[person.id],
+                last_seen_at=_iso(person.last_seen_at or fallback_last_seen.get(person.id)),
+                top_facts=facts_by_person[person.id][:TOP_FACTS_PER_PERSON],
+                fact_count=len(facts_by_person[person.id]),
+                summary_count=int(summary_counts.get(person.id, 0)),
+                relationship_count=int(edge_counts.get(person.id, 0)),
+            )
+            for person in people
+        ]
 
     def _load_person(self, session: Session, person_id: UUID) -> PersonOut:
         person = self._get_person(session, person_id, person_user_id=None)

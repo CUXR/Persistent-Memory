@@ -316,16 +316,32 @@ def _take_top(
     return [candidate for candidate, _, _ in ranked[:limit]]
 
 
+_default_bi_encoder_instance: BiEncoder | None = None
+_default_reranker_instance: CrossEncoderReranker | None = None
+
+
 def _default_bi_encoder() -> BiEncoder:
-    if importlib.util.find_spec("sentence_transformers") is None:
-        return LexicalBiEncoder()
-    return BGEM3BiEncoder()
+    """Return the process-wide default bi-encoder (model-backed when available)."""
+
+    global _default_bi_encoder_instance
+    if _default_bi_encoder_instance is None:
+        if importlib.util.find_spec("sentence_transformers") is None:
+            _default_bi_encoder_instance = LexicalBiEncoder()
+        else:
+            _default_bi_encoder_instance = BGEM3BiEncoder()
+    return _default_bi_encoder_instance
 
 
 def _default_reranker() -> CrossEncoderReranker:
-    if importlib.util.find_spec("sentence_transformers") is None:
-        return LexicalCrossEncoder()
-    return BGEReranker()
+    """Return the process-wide default reranker (model-backed when available)."""
+
+    global _default_reranker_instance
+    if _default_reranker_instance is None:
+        if importlib.util.find_spec("sentence_transformers") is None:
+            _default_reranker_instance = LexicalCrossEncoder()
+        else:
+            _default_reranker_instance = BGEReranker()
+    return _default_reranker_instance
 
 
 def _normalize_token(token: str) -> str:

@@ -21,9 +21,9 @@ def _get_or_create_seed_owner(db_url: str):
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     with Session() as session:
-        owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
-        if owner is None:
-            with session.begin():
+        with session.begin():
+            owner = session.scalar(select(User).order_by(User.created_at.asc()).limit(1))
+            if owner is None:
                 owner = User(
                     first_name="Seed",
                     last_name="Owner",
@@ -33,9 +33,9 @@ def _get_or_create_seed_owner(db_url: str):
                 session.add(owner)
                 session.flush()
                 print(f"Created seed owner user id={owner.id}")
-        else:
-            print(f"Using existing owner user id={owner.id}")
-        owner_id = owner.id
+            else:
+                print(f"Using existing owner user id={owner.id}")
+            owner_id = owner.id
 
     engine.dispose()
     return owner_id

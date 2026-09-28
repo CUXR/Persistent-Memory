@@ -20,6 +20,8 @@ import pytest
 # so these stubs are never actually used to open a connection or make API calls.
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("OPENAI_API_KEY", "test-key-not-used-in-tests")
+# The memory browser tests exercise the local-dev owner fallback on purpose.
+os.environ.setdefault("ALLOW_DEV_AUTH_FALLBACK", "true")
 
 
 def pytest_configure(config):
