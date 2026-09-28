@@ -19,11 +19,13 @@ from ..crud.person_resolver import PersonResolver
 from ..schema.browser import (
     ConversationDetailOut,
     PeopleDirectoryOut,
+    PersonContextOut,
     PersonListItemOut,
     PersonProfileOut,
+    PersonSummaryOut,
+    ProfileContextOut,
     RecentConversationOut,
 )
-from ..schema.memory import RetrievedPersonContext
 from ..schema.person_resolver import ResolveResult
 from .retrieval_service import retrieve_person_context
 
@@ -94,8 +96,8 @@ def get_person_profile(
 
     store = _owner_store(session, owner_user_id)
     return PersonProfileOut(
-        person=store.get_person(person_id),
-        profile=store.get_profile_context(person_id),
+        person=PersonSummaryOut.from_person(store.get_person(person_id)),
+        profile=ProfileContextOut.from_profile(store.get_profile_context(person_id)),
     )
 
 
@@ -104,14 +106,14 @@ def get_person_retrieval_context(
     owner_user_id: UUID,
     person_id: UUID,
     query: str,
-) -> RetrievedPersonContext:
+) -> PersonContextOut:
     """Load query-relevant stored memory for one person.
 
     Raises ``ValueError`` when the person does not exist for this owner.
     """
 
     store = _owner_store(session, owner_user_id)
-    return retrieve_person_context(person_id, query, store=store)
+    return PersonContextOut.from_context(retrieve_person_context(person_id, query, store=store))
 
 
 def _resolve_directory_items(

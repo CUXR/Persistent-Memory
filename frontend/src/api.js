@@ -16,9 +16,9 @@ function describeValidationErrors(detail) {
       if (!entry || typeof entry !== "object") {
         return "";
       }
-      const location = Array.isArray(entry.loc)
-        ? entry.loc.filter((part) => part !== "query" && part !== "path" && part !== "body").join(".")
-        : "";
+      const loc = Array.isArray(entry.loc) ? entry.loc : [];
+      const parts = ["query", "path", "body", "header"].includes(loc[0]) ? loc.slice(1) : loc;
+      const location = parts.join(".");
       return location ? `${location}: ${entry.msg}` : entry.msg || "";
     })
     .filter(Boolean);

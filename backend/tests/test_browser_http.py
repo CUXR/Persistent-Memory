@@ -224,12 +224,41 @@ def test_person_profile_is_scoped_to_owner(api):
     assert missing.status_code == 404
 
 
+def test_person_context_is_scoped_to_owner(api):
+    client = api["client"]
+
+    own = client.get(f"/people/{api['emily_id']}/context", params={"query": "robotics"}, headers=_headers(api["owner_a"]))
+    assert own.status_code == 200
+    assert own.json()["person_id"] == api["emily_id"]
+    assert [f["fact_text"] for f in own.json()["facts"]] == ["Emily leads the robotics club"]
+    assert "embedding" not in own.json()["facts"][0]
+
+    cross = client.get(f"/people/{api['emily_id']}/context", params={"query": "robotics"}, headers=_headers(api["owner_b"]))
+    assert cross.status_code == 404
+    assert cross.json()["detail"] == "Person not found"
+
+    assert client.get(f"/people/{uuid4()}/context", params={"query": "x"}, headers=_headers(api["owner_a"])).status_code == 404
+    assert client.get(f"/people/{api['emily_id']}/context", params={"query": ""}, headers=_headers(api["owner_a"])).status_code == 422
+    assert client.get(f"/people/{api['emily_id']}/context", headers=_headers(api["owner_a"])).status_code == 422
+
+
+def test_profile_payload_omits_vectors_and_biometric_keys(api):
+    payload = api["client"].get(f"/people/{api['emily_id']}/profile", headers=_headers(api["owner_a"])).json()
+
+    assert set(payload["person"]) == {"id", "name", "aliases", "created_at", "updated_at"}
+    assert set(payload["profile"]) == {"facts", "prefs", "summaries", "edges_from"}
+    assert "embedding" not in payload["profile"]["facts"][0]
+    assert payload["person"]["created_at"].endswith("+00:00")
+
+
 def test_current_user_endpoint(api):
     client = api["client"]
 
     ok = client.get("/users/me", headers=_headers(api["owner_a"]))
     assert ok.status_code == 200
     assert ok.json()["username"] == "avery-owner"
+    assert ok.json()["created_at"].endswith("+00:00")
+    assert ok.json()["updated_at"].endswith("+00:00")
 
     assert client.get("/users/me", headers=_headers(uuid4())).status_code in (401, 404)
 

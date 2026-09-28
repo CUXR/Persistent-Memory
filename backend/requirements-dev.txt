@@ -1,0 +1,3 @@
+-r requirements.txt
+pytest>=8,<10
+httpx==0.27.2  # FastAPI TestClient; 0.28+ is incompatible with the pinned Starlette

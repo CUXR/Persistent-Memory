@@ -318,7 +318,15 @@ test("views escape untrusted memory text", () => {
 
   const people = renderPeopleState({
     status: "ready",
-    directory: { items: [], query: hostile, resolution: null },
+    directory: {
+      items: [],
+      query: hostile,
+      resolution: {
+        person_id: null,
+        is_ambiguous: true,
+        candidates: [{ person_id: "c-1", name: hostile, hints: { [hostile]: [hostile] } }],
+      },
+    },
     items: [{ ...johnCard, name: hostile, aliases: [hostile], top_facts: [hostile] }],
     selectedProfile: {
       person: { id: "john-1", name: hostile, aliases: [hostile] },
@@ -334,4 +342,46 @@ test("views escape untrusted memory text", () => {
     searchQuery: hostile,
   });
   assert.doesNotMatch(people, /<img/);
+  assert.match(people, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+});
+
+test("search form does not pin a resolver-implied selection", () => {
+  const profile = {
+    person: { id: "john-1", name: "John Rivera", aliases: [] },
+    profile: { facts: [], prefs: [], summaries: [], edges_from: [] },
+  };
+  const implied = renderPeopleState({
+    status: "ready",
+    directory: { items: [johnCard], query: "John", resolution: { person_id: "john-1", is_ambiguous: false, candidates: [] } },
+    items: [johnCard],
+    selectedProfile: profile,
+    contextQuery: "hobbies",
+    searchQuery: "John",
+    impliedSelection: true,
+  });
+  assert.match(implied, /data-selected-person-id=""/);
+  assert.match(implied, /data-ask-query=""/);
+
+  const explicit = renderPeopleState({
+    status: "ready",
+    directory: { items: [johnCard], query: null, resolution: null },
+    items: [johnCard],
+    selectedProfile: profile,
+    contextQuery: "hobbies",
+    searchQuery: "",
+    impliedSelection: false,
+  });
+  assert.match(explicit, /data-selected-person-id="john-1"/);
+  assert.match(explicit, /data-ask-query="hobbies"/);
+
+  const failed = renderPeopleState({
+    status: "ready",
+    directory: { items: [johnCard], query: "John", resolution: { person_id: "john-1", is_ambiguous: false, candidates: [] } },
+    items: [johnCard],
+    selectedProfile: null,
+    detailError: "Person not found",
+    searchQuery: "John",
+    impliedSelection: true,
+  });
+  assert.match(failed, /href="#\/people">Clear search<\/a>/);
 });

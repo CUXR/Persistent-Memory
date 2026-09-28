@@ -3,9 +3,13 @@
 from .browser import (
     ConversationDetailOut,
     ConversationParticipantOut,
+    FactSummaryOut,
     PeopleDirectoryOut,
+    PersonContextOut,
     PersonListItemOut,
     PersonProfileOut,
+    PersonSummaryOut,
+    ProfileContextOut,
     RecentConversationOut,
 )
 from .memory import (
@@ -25,10 +29,14 @@ __all__ = [
     "ConversationDetailOut",
     "EdgeOut",
     "FactOut",
+    "FactSummaryOut",
     "PeopleDirectoryOut",
+    "PersonContextOut",
     "PersonListItemOut",
     "PersonProfileOut",
+    "PersonSummaryOut",
     "PersonOut",
+    "ProfileContextOut",
     "PrefOut",
     "ProfileContext",
     "RecentConversationOut",

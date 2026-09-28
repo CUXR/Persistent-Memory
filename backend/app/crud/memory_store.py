@@ -49,13 +49,17 @@ TOP_FACTS_PER_PERSON = 2
 
 
 def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """Treat naive datetimes (as SQLite returns them) as UTC so they compare safely."""
+    """Normalize to an aware UTC datetime.
+
+    Naive values (as SQLite returns them) are treated as UTC; aware values with
+    another offset are converted, so storage and comparisons are offset-safe.
+    """
 
     if dt is None:
         return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
-    return dt
+    return dt.astimezone(timezone.utc)
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -317,8 +321,8 @@ class MemoryStore:
                 episode = Episode(
                     user_id=owner.id,
                     person_id=ordered_participants[0],
-                    start_time=data.time_start,
-                    end_time=data.time_end,
+                    start_time=_as_utc(data.time_start),
+                    end_time=_as_utc(data.time_end),
                     transcript=data.transcript,
                     dialogue_summary=data.summary,
                 )
@@ -755,7 +759,9 @@ class MemoryStore:
         """Return owner-scoped ``(person_id, name)`` participants per episode.
 
         Ordering is deterministic: the episode's primary person first, then the
-        remaining participants by link time, name, and id.
+        remaining participants alphabetically by name (id as a final tie-break).
+        Link timestamps are not used because rows written in one flush can share
+        the same clock reading.
         """
 
         episode_ids = [episode.id for episode in episodes]
@@ -763,7 +769,6 @@ class MemoryStore:
         rows = session.execute(
             select(
                 EpisodeParticipant.episode_id,
-                EpisodeParticipant.created_at,
                 Person.id,
                 Person.display_name,
                 Person.first_name,
@@ -777,13 +782,13 @@ class MemoryStore:
         ).all()
 
         grouped: dict[UUID, list[tuple]] = {episode_id: [] for episode_id in episode_ids}
-        for episode_id, linked_at, person_id, display_name, first_name, last_name in rows:
+        for episode_id, person_id, display_name, first_name, last_name in rows:
             name = _display_name(display_name, first_name, last_name)
             is_primary = primary_by_episode.get(episode_id) == person_id
-            grouped[episode_id].append((0 if is_primary else 1, linked_at, name.lower(), str(person_id), person_id, name))
+            grouped[episode_id].append((0 if is_primary else 1, name.lower(), str(person_id), person_id, name))
 
         return {
-            episode_id: [(person_id, name) for _, _, _, _, person_id, name in sorted(items, key=lambda row: row[:4])]
+            episode_id: [(person_id, name) for _, _, _, person_id, name in sorted(items, key=lambda row: row[:3])]
             for episode_id, items in grouped.items()
         }
 

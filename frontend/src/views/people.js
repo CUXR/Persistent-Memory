@@ -298,7 +298,9 @@ function renderSelectedProfile(selectedProfile, searchQuery, impliedSelection) {
 }
 
 function renderSearchSection(state) {
-  const selectedPersonId = state.selectedProfile?.person?.id || "";
+  // A resolver-implied selection must be re-derived from the next search, not pinned to the URL.
+  const selectedPersonId = state.impliedSelection ? "" : state.selectedProfile?.person?.id || "";
+  const askQuery = state.impliedSelection ? "" : state.contextQuery || "";
   return `
     <section class="list-card search-shell">
       <div class="list-row">
@@ -311,13 +313,14 @@ function renderSearchSection(state) {
         id="directory-search-form"
         class="query-form"
         data-selected-person-id="${escapeHtml(selectedPersonId)}"
-        data-ask-query="${escapeHtml(state.contextQuery || "")}"
+        data-ask-query="${escapeHtml(askQuery)}"
       >
         <input
           id="directory-search-input"
           class="query-input"
           name="search"
           type="search"
+          maxlength="200"
           aria-label="Search people by name, alias, or remembered detail"
           placeholder="Search by name, alias, or remembered detail"
           value="${escapeHtml(state.searchQuery || "")}"
@@ -353,6 +356,7 @@ function renderRetrievalComposer(selectedProfile, contextQuery, searchQuery) {
           class="query-input"
           name="query"
           type="search"
+          maxlength="400"
           aria-label="Ask a question about this person"
           placeholder="What do we know about this person?"
           value="${escapeHtml(contextQuery || "")}"
@@ -398,7 +402,7 @@ export function renderPeopleState(state) {
   if (state.detailError) {
     detailColumn = `
       ${renderStatusCard("Could not load this person", state.detailError, "error")}
-      <div class="empty-cta"><a class="nav-link" href="${peopleHref({ searchQuery: state.searchQuery })}">Back to the directory</a></div>
+      <div class="empty-cta"><a class="nav-link" href="${impliedSelection ? peopleHref() : peopleHref({ searchQuery: state.searchQuery })}">${impliedSelection ? "Clear search" : "Back to the directory"}</a></div>
     `;
   } else if (state.selectedProfile) {
     detailColumn = `

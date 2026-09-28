@@ -1,5 +1,6 @@
 import { createApiClient } from "./api.js";
-import { conversationsHref, isRecordId, parseRoute, peopleHref } from "./router.js";
+import { createRouteLoaders, getErrorMessage, shouldSyncSearch } from "./loaders.js";
+import { conversationsHref, parseRoute, peopleHref } from "./router.js";
 import { describeSessionSource } from "./session.js";
 import { renderConversationsState } from "./views/conversations.js";
 import { renderPeopleState } from "./views/people.js";
@@ -11,19 +12,10 @@ let currentUserState = { status: "loading", user: null };
 // Monotonic counter so a slow, superseded route load can never overwrite a newer one.
 let renderSequence = 0;
 let lastSyncedSearchQuery = null;
+const loaders = createRouteLoaders(apiClient);
 
-function settle(promise) {
-  return promise.then(
-    (value) => ({ value, error: null }),
-    (error) => ({ value: null, error: getErrorMessage(error) }),
-  );
-}
-
-const NOTHING = Promise.resolve({ value: null, error: null });
-
-function invalidId(label) {
-  return Promise.resolve({ value: null, error: `${label} id in the address is not valid.` });
-}
+export const SEARCH_MAX_LENGTH = 200;
+export const ASK_MAX_LENGTH = 400;
 
 const routes = {
   conversations: {
@@ -32,15 +24,7 @@ const routes = {
     title: "Recent Conversations",
     description: "Latest ingested episodes, grouped by when they happened and who took part.",
     renderer: renderConversationsState,
-    async load({ episodeId }) {
-      // The list drives the page state; a failing detail fetch only affects the detail pane.
-      let detailPromise = NOTHING;
-      if (episodeId) {
-        detailPromise = isRecordId(episodeId) ? settle(apiClient.getConversation(episodeId)) : invalidId("The conversation");
-      }
-      const [items, detail] = await Promise.all([apiClient.listRecentConversations(), detailPromise]);
-      return { items, selectedConversation: detail.value, detailError: detail.error };
-    },
+    load: loaders.conversations,
     render: (data) => renderConversationsState({ status: "ready", ...data }),
   },
   people: {
@@ -49,50 +33,10 @@ const routes = {
     title: "People",
     description: "People remembered by this account, with quick metadata for browsing.",
     renderer: renderPeopleState,
-    async load({ personId, searchQuery, contextQuery }) {
-      const directory = await apiClient.listPeople(searchQuery);
-      if (personId && !isRecordId(personId)) {
-        const invalid = await invalidId("The person");
-        return {
-          directory,
-          items: directory.items,
-          selectedProfile: null,
-          detailError: invalid.error,
-          selectedContext: null,
-          contextError: null,
-          contextQuery,
-          searchQuery,
-          impliedSelection: false,
-        };
-      }
-      const impliedPersonId = !personId && directory.resolution?.person_id ? directory.resolution.person_id : null;
-      const selectedPersonId = personId || impliedPersonId;
-      const [profile, context] = await Promise.all([
-        selectedPersonId ? settle(apiClient.getPersonProfile(selectedPersonId)) : NOTHING,
-        selectedPersonId && contextQuery ? settle(apiClient.getPersonContext(selectedPersonId, contextQuery)) : NOTHING,
-      ]);
-      return {
-        directory,
-        items: directory.items,
-        selectedProfile: profile.value,
-        detailError: profile.error,
-        selectedContext: context.value,
-        contextError: context.error,
-        contextQuery,
-        searchQuery,
-        impliedSelection: Boolean(impliedPersonId),
-      };
-    },
+    load: loaders.people,
     render: (data) => renderPeopleState({ status: "ready", ...data }),
   },
 };
-
-function getErrorMessage(error) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Something unexpected happened while loading this page.";
-}
 
 function sessionChipText() {
   if (currentUserState.status === "ready" && currentUserState.user) {
@@ -141,6 +85,7 @@ function ensureShell() {
                 class="global-search-input"
                 name="search"
                 type="search"
+                maxlength="${SEARCH_MAX_LENGTH}"
                 aria-label="Find a person in memory"
                 placeholder="Find a person in memory"
               />
@@ -152,7 +97,7 @@ function ensureShell() {
         <main class="content">
           <section class="section-heading">
             <div>
-              <h2 id="route-title"></h2>
+              <h2 id="route-title" tabindex="-1"></h2>
               <p id="route-description"></p>
             </div>
             <div id="route-count" class="meta-note"></div>
@@ -193,7 +138,7 @@ function syncGlobalSearch(searchQuery) {
     return;
   }
   // Only overwrite what the user typed when the route's search actually changed.
-  if (searchQuery !== lastSyncedSearchQuery) {
+  if (shouldSyncSearch(searchQuery, lastSyncedSearchQuery)) {
     input.value = searchQuery || "";
     lastSyncedSearchQuery = searchQuery;
   }
@@ -208,8 +153,39 @@ function bindGlobalSearchForm() {
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    window.location.hash = peopleHref({ searchQuery: input.value.trim() });
+    window.location.hash = peopleHref({ searchQuery: clip(input.value, SEARCH_MAX_LENGTH) });
   });
+}
+
+function clip(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+/** Remember which element had focus so a re-render can hand it back. */
+function captureFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !appRoot.contains(active)) {
+    return null;
+  }
+  return { id: active.id || null, inRouteContent: Boolean(active.closest("#route-content")) };
+}
+
+function restoreFocus(snapshot) {
+  if (!snapshot) {
+    return;
+  }
+  const target = snapshot.id ? appRoot.querySelector(`#${CSS.escape(snapshot.id)}`) : null;
+  if (target instanceof HTMLElement) {
+    target.focus();
+    if (target instanceof HTMLInputElement) {
+      const end = target.value.length;
+      target.setSelectionRange(end, end);
+    }
+    return;
+  }
+  if (snapshot.inRouteContent) {
+    appRoot.querySelector("#route-title")?.focus();
+  }
 }
 
 function bindPeopleForms() {
@@ -223,7 +199,7 @@ function bindPeopleForms() {
       }
       window.location.hash = peopleHref({
         personId: directoryForm.getAttribute("data-selected-person-id") || null,
-        searchQuery: input.value.trim(),
+        searchQuery: clip(input.value, SEARCH_MAX_LENGTH),
         contextQuery: directoryForm.getAttribute("data-ask-query") || "",
       });
     });
@@ -241,7 +217,7 @@ function bindPeopleForms() {
       window.location.hash = peopleHref({
         personId,
         searchQuery: queryForm.getAttribute("data-search-query") || "",
-        contextQuery: input.value.trim(),
+        contextQuery: clip(input.value, ASK_MAX_LENGTH),
       });
     });
   }
@@ -270,6 +246,7 @@ async function renderCurrentRoute() {
   const sequence = ++renderSequence;
   const params = parseRoute(window.location.hash);
   const route = routes[params.key];
+  const focusSnapshot = captureFocus();
 
   renderShell(params.key, route.renderer({ status: "loading" }));
   syncGlobalSearch(params.searchQuery);
@@ -287,6 +264,7 @@ async function renderCurrentRoute() {
     }
     renderShell(params.key, route.renderer({ status: "error", message: getErrorMessage(error) }));
   }
+  restoreFocus(focusSnapshot);
 }
 
 async function loadCurrentUser() {

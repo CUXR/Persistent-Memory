@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class UserFactRead(BaseModel):
@@ -32,3 +32,10 @@ class UserRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     facts: list[UserFactRead] = Field(default_factory=list)
+
+    @field_serializer("created_at", "updated_at")
+    def _serialize_utc(self, value: datetime) -> str:
+        # SQLite returns naive datetimes; present every timestamp as aware UTC ISO-8601.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()

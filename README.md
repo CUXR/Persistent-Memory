@@ -57,7 +57,7 @@ browse.
    OPENAI_API_KEY=unused-for-browsing
    ALLOW_DEV_AUTH_FALLBACK=true
    EOF
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    python -m scripts.seed_memory_store
    ```
 
@@ -128,13 +128,15 @@ npm run eval   # retrieval eval harness
 ### Backend
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install -r requirements.txt       # runtime only
+pip install -r requirements-dev.txt   # runtime + pytest + httpx (TestClient)
 python -m uvicorn app.main:app --reload
 python -m pytest            # from backend/ (or `pytest` from the repo root)
 ```
 
-`DATABASE_URL` and `OPENAI_API_KEY` are required at startup (see
-`backend/.env.example` for every supported variable).
+`DATABASE_URL` and `OPENAI_API_KEY` are required at startup; see
+`backend/.env.example` for the commonly used variables and
+`backend/app/core/config.py` for the full list.
 
 ### Backend with Docker
 ```bash
@@ -143,6 +145,13 @@ docker compose up --build
 ```
 
 The API will be available on `http://localhost:8000` and PostgreSQL on `localhost:5432`.
+The compose stack does not create the schema or any data, so on a fresh volume
+run the migrations and (optionally) the seed script before opening the app:
+
+```bash
+docker compose exec api alembic upgrade head
+docker compose exec api python -m scripts.seed_memory_store
+```
 
 ### Services
 The `face_recog_local.py` service handles face recognition tasks.
@@ -150,5 +159,5 @@ The `face_recog_local.py` service handles face recognition tasks.
 ## Dependencies
 
 - **Frontend**: Node.js with TypeScript
-- **Backend**: Python 3.8+ with FastAPI
+- **Backend**: Python 3.10+ with FastAPI (compose uses 3.12)
 - **Services**: Face recognition libraries (see requirements.txt)

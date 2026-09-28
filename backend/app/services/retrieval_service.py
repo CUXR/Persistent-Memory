@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import importlib.util
 import math
 import re
+import threading
 from typing import Any, Protocol, Sequence, cast
 from uuid import UUID
 
@@ -112,9 +113,11 @@ class BGEM3BiEncoder:
 
     def _load_model(self) -> Any:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            with _default_scorer_lock:
+                if self._model is None:
+                    from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self._model_name)
+                    self._model = SentenceTransformer(self._model_name)
         return self._model
 
     def score(self, query: str, texts: Sequence[str]) -> list[float]:
@@ -143,9 +146,11 @@ class BGEReranker:
 
     def _load_model(self) -> Any:
         if self._model is None:
-            from sentence_transformers import CrossEncoder
+            with _default_scorer_lock:
+                if self._model is None:
+                    from sentence_transformers import CrossEncoder
 
-            self._model = CrossEncoder(self._model_name)
+                    self._model = CrossEncoder(self._model_name)
         return self._model
 
     def score(self, query: str, texts: Sequence[str]) -> list[float]:
@@ -318,6 +323,9 @@ def _take_top(
 
 _default_bi_encoder_instance: BiEncoder | None = None
 _default_reranker_instance: CrossEncoderReranker | None = None
+# Request handlers run in a threadpool; guard the one-time construction so a
+# concurrent cold start cannot build (and load) two copies of a model.
+_default_scorer_lock = threading.Lock()
 
 
 def _default_bi_encoder() -> BiEncoder:
@@ -325,10 +333,12 @@ def _default_bi_encoder() -> BiEncoder:
 
     global _default_bi_encoder_instance
     if _default_bi_encoder_instance is None:
-        if importlib.util.find_spec("sentence_transformers") is None:
-            _default_bi_encoder_instance = LexicalBiEncoder()
-        else:
-            _default_bi_encoder_instance = BGEM3BiEncoder()
+        with _default_scorer_lock:
+            if _default_bi_encoder_instance is None:
+                if importlib.util.find_spec("sentence_transformers") is None:
+                    _default_bi_encoder_instance = LexicalBiEncoder()
+                else:
+                    _default_bi_encoder_instance = BGEM3BiEncoder()
     return _default_bi_encoder_instance
 
 
@@ -337,10 +347,12 @@ def _default_reranker() -> CrossEncoderReranker:
 
     global _default_reranker_instance
     if _default_reranker_instance is None:
-        if importlib.util.find_spec("sentence_transformers") is None:
-            _default_reranker_instance = LexicalCrossEncoder()
-        else:
-            _default_reranker_instance = BGEReranker()
+        with _default_scorer_lock:
+            if _default_reranker_instance is None:
+                if importlib.util.find_spec("sentence_transformers") is None:
+                    _default_reranker_instance = LexicalCrossEncoder()
+                else:
+                    _default_reranker_instance = BGEReranker()
     return _default_reranker_instance
 
 

@@ -5,6 +5,23 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def parse_cors_origins(value: object) -> list[str]:
+    """Parse a comma-separated string or JSON list of origins into a clean list."""
+
+    if isinstance(value, (list, tuple)):
+        items = [str(item) for item in value]
+    else:
+        text = str(value or "").strip()
+        if text.startswith("["):
+            decoded = json.loads(text)
+            if not isinstance(decoded, list):
+                raise ValueError("cors_allowed_origins JSON value must be a list")
+            items = [str(item) for item in decoded]
+        else:
+            items = text.split(",")
+    return [item.strip() for item in items if item.strip()]
+
+
 class Settings(BaseSettings):
     """Application settings loaded exclusively from environment variables / .env.
 
@@ -47,31 +64,27 @@ class Settings(BaseSettings):
     # user when no header is sent. Never enable this on a shared deployment;
     # the real session middleware sets ``request.state.user_id`` instead.
     allow_dev_auth_fallback: bool = False
-    # Browser origins allowed to call the API. Accepts a JSON list or a
-    # comma-separated string, e.g. ``http://localhost:5173,http://127.0.0.1:5173``.
-    cors_allowed_origins: list[str] = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ]
-
-    @field_validator("cors_allowed_origins", mode="before")
-    @classmethod
-    def _split_cors_origins(cls, value: object) -> object:
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped.startswith("["):
-                return json.loads(stripped)
-            return [origin.strip() for origin in stripped.split(",") if origin.strip()]
-        return value
+    # Browser origins allowed to call the API, as a comma-separated string or a
+    # JSON list, e.g. ``http://localhost:5173,http://127.0.0.1:5173``. Kept as a
+    # plain string because pydantic-settings 2.1 JSON-decodes ``list`` fields
+    # at the environment layer, before any validator can split on commas.
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     @field_validator("cors_allowed_origins")
     @classmethod
-    def _reject_wildcard_origin(cls, value: list[str]) -> list[str]:
-        if "*" in value:
+    def _validate_cors_origins(cls, value: str) -> str:
+        origins = parse_cors_origins(value)
+        if "*" in origins:
             raise ValueError(
                 "cors_allowed_origins must list explicit origins; '*' is not allowed with credentials"
             )
-        return value
+        return ",".join(origins)
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """The configured CORS origins as a list."""
+
+        return parse_cors_origins(self.cors_allowed_origins)
 
     # ------------------------------------------------------------------ #
     # OpenAI / LLM — api key required; model and retries have defaults    #

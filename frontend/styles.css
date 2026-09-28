@@ -124,9 +124,10 @@ a {
   color: rgba(247, 243, 233, 0.74);
 }
 
-.global-search-input:focus {
-  outline: 2px solid rgba(255, 255, 255, 0.24);
-  border-color: rgba(255, 255, 255, 0.32);
+.global-search-input:focus-visible {
+  outline: 2px solid #f7f3e9;
+  outline-offset: 2px;
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 .nav {
@@ -384,9 +385,21 @@ a {
   font: inherit;
 }
 
-.query-input:focus {
-  outline: 2px solid rgba(55, 84, 58, 0.22);
-  border-color: rgba(55, 84, 58, 0.28);
+.query-input:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-color: var(--brand);
+}
+
+#route-title:focus {
+  outline: none;
+}
+
+.nav-link:focus-visible,
+.suggestion-pill:focus-visible,
+.pill:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 .suggestion-pill {

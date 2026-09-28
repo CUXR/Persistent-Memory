@@ -102,6 +102,17 @@ test("API client describes FastAPI validation errors", async () => {
   );
 });
 
+test("API client keeps the parameter name when it is literally 'query'", async () => {
+  const { client } = recordingClient(() =>
+    jsonResponse({ detail: [{ loc: ["query", "query"], msg: "String should have at most 200 characters", type: "string_too_long" }] }, 422),
+  );
+
+  await assert.rejects(
+    () => client.listPeople("x".repeat(201)),
+    /Invalid request \(query: String should have at most 200 characters\)/,
+  );
+});
+
 test("API client falls back to plain-text bodies and generic messages", async () => {
   const plain = recordingClient(() => new Response("upstream unavailable", { status: 502 }));
   await assert.rejects(() => plain.client.listPeople(), /upstream unavailable/);

@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..deps import get_authenticated_owner_user_id, get_db_session
-from ...schema.browser import PeopleDirectoryOut, PersonProfileOut
-from ...schema.memory import RetrievedPersonContext
+from ...schema.browser import PeopleDirectoryOut, PersonContextOut, PersonProfileOut
 from ...services.browser_service import (
     get_person_profile,
     get_person_retrieval_context,
@@ -47,13 +46,13 @@ def get_people_profile(
         ) from exc
 
 
-@router.get("/{person_id}/context", response_model=RetrievedPersonContext)
+@router.get("/{person_id}/context", response_model=PersonContextOut)
 def get_people_context(
     person_id: UUID,
     owner_user_id: Annotated[UUID, Depends(get_authenticated_owner_user_id)],
     session: Annotated[Session, Depends(get_db_session)],
     query: Annotated[str, Query(min_length=1, max_length=400)],
-) -> RetrievedPersonContext:
+) -> PersonContextOut:
     """Return relevant stored memory for one person and one user query."""
 
     try:

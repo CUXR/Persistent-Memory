@@ -119,13 +119,16 @@ def test_list_people_overview_falls_back_to_episode_time_when_last_seen_unset(st
 
 def test_list_recent_conversations_orders_participants_deterministically(store):
     zoe = store.upsert_person(name="Zoe Alder")
+    carl = store.upsert_person(name="Carl Dent")
     amy = store.upsert_person(name="Amy Brook")
     base = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+    # Insertion order (zoe, carl, amy) differs from alphabetical order so a
+    # clock-dependent sort would be caught.
     episode_id = store.write_episode(
         time_start=base,
         time_end=base + timedelta(minutes=10),
         summary="Zoe led the discussion.",
-        participants=[zoe.id, amy.id],
+        participants=[zoe.id, carl.id, amy.id],
     )
 
     recent = store.list_recent_conversations()
@@ -133,10 +136,25 @@ def test_list_recent_conversations_orders_participants_deterministically(store):
 
     assert [item.id for item in recent] == [episode_id]
     # Primary participant first, then the rest alphabetically, on both read paths.
-    assert [p.name for p in recent[0].participants] == ["Zoe Alder", "Amy Brook"]
-    assert [p.name for p in detail.participants] == ["Zoe Alder", "Amy Brook"]
+    assert [p.name for p in recent[0].participants] == ["Zoe Alder", "Amy Brook", "Carl Dent"]
+    assert [p.name for p in detail.participants] == ["Zoe Alder", "Amy Brook", "Carl Dent"]
     assert recent[0].started_at == detail.started_at == base.isoformat()
     assert detail.participants[0].last_seen_at == (base + timedelta(minutes=10)).isoformat()
+
+
+def test_episode_times_with_non_utc_offsets_are_stored_as_utc(store):
+    emily = store.upsert_person(name="Emily Chen")
+    plus_two = timezone(timedelta(hours=2))
+    start = datetime(2026, 9, 1, 12, 0, tzinfo=plus_two)  # 10:00 UTC
+    end = datetime(2026, 9, 1, 12, 30, tzinfo=plus_two)  # 10:30 UTC
+
+    store.write_episode(time_start=start, time_end=end, participants=[emily.id])
+
+    recent = store.list_recent_conversations()[0]
+    assert recent.started_at == "2026-09-01T10:00:00+00:00"
+    assert recent.ended_at == "2026-09-01T10:30:00+00:00"
+    assert store.list_people_overview()[0].last_seen_at == "2026-09-01T10:30:00+00:00"
+    assert _last_seen(store, emily.id) == end
 
 
 def test_recent_conversation_reads_reject_bad_limits_and_unknown_episodes(store):
