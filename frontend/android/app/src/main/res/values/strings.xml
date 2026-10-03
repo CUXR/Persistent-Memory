@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Memory</string>
+    <string name="hud_label">MEMORY · LOCAL DEMO</string>
+    <string name="hud_controls">Tap: next · Swipe: browse · Double-tap: exit</string>
+    <string name="page_number">%1$d / %2$d</string>
+    <string-array name="hud_titles">
+        <item>Ready</item>
+        <item>Sample memory</item>
+        <item>Display check</item>
+    </string-array>
+    <string-array name="hud_messages">
+        <item>Text is running locally\non your glasses.</item>
+        <item>Alex studies robotics.\nAsk about their latest project.</item>
+        <item>You should see one clear\nblock of text with both eyes open.</item>
+    </string-array>
+</resources>

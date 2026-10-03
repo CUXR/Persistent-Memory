@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.MemoryGlasses" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/hud_background</item>
+        <item name="android:colorAccent">@color/hud_accent</item>
+    </style>
+</resources>

@@ -1,0 +1,6 @@
+<resources>
+    <color name="hud_background">#000000</color>
+    <color name="hud_primary">#FFFFFF</color>
+    <color name="hud_secondary">#B8C2CC</color>
+    <color name="hud_accent">#8BE0D0</color>
+</resources>

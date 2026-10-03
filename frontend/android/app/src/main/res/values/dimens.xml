@@ -1,0 +1,8 @@
+<resources>
+    <dimen name="hud_padding_horizontal">40dp</dimen>
+    <dimen name="hud_padding_vertical">32dp</dimen>
+    <dimen name="hud_gap">16dp</dimen>
+    <dimen name="hud_text_small">18sp</dimen>
+    <dimen name="hud_text_body">28sp</dimen>
+    <dimen name="hud_text_title">36sp</dimen>
+</resources>
