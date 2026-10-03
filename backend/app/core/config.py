@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Face embeddings (voice embeddings use a fixed model dimension)       #
     # ------------------------------------------------------------------ #
     embedding_dimension: int = 512
+    # Squared L2 distance between unit-normalized embeddings (FAISS IndexFlatL2);
+    # equals 2 - 2*cosine. Validated on LFW; see docs/face_threshold_validation.md.
+    face_match_l2_threshold: float = Field(default=1.5, gt=0, le=4)
     db_echo: bool = False
 
     # ------------------------------------------------------------------ #
