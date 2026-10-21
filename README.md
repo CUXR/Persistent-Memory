@@ -174,6 +174,33 @@ live capture worker are still application integration work; the Python
 recognizer, frontend source interface, and backend handoff are independently
 callable and tested.
 
+## Person briefings
+
+`BriefingService` in `backend/app/services/briefing.py` returns a short, bounded
+brief about one person for the glasses. It has two entry points:
+
+- `brief(person_id, max_facts=5)` is the face path: the face tracker already
+  holds the person's UUID. The brief contains the display name (`null` with
+  `is_unnamed=true` for an `Unknown person` placeholder), up to `max_facts`
+  hobby facts and up to `max_facts` affiliation facts, and the last
+  interaction's date and conversation summary. An ID that does not exist or
+  belongs to another owner raises `PersonNotFoundError`.
+- `brief_by_name(name, max_facts=5)` is the name path. It resolves the name with
+  `PersonResolver` and returns `found` with the same brief plus up to
+  `max_facts` visual descriptors, `ambiguous` with candidates whose hints are
+  capped at `max_facts` per category, or `not_found` with
+  "There is no one in your memory named <name>." Unnamed placeholders never
+  match a name.
+
+Facts are treated as already ranked; until a ranking exists, the newest facts
+come first. `top_facts()` in `backend/app/crud/briefing_queries.py` is the one
+place to swap in a ranking.
+
+```sh
+python -m app.cli.briefing --owner-id USER_UUID brief PERSON_UUID
+python -m app.cli.briefing --owner-id USER_UUID --max-facts 3 by-name "Sam"
+```
+
 ## Code map and remaining scope
 
 - `services/audio_pipeline/`: capture, normalization, Silero VAD, pyannote adapters,
@@ -183,15 +210,21 @@ callable and tested.
 - `backend/app/services/asr*.py`: transcription and dialog assembly.
 - `backend/app/crud/voice.py`, `audio_jobs.py`, `conversations.py`: owned profiles,
   durable jobs, and transactional memory writes.
+- `backend/app/services/briefing.py`, `crud/briefing_queries.py`, `schema/briefing.py`:
+  owner-scoped person briefings by face (person ID) and by name.
+- `backend/app/crud/person_resolver.py`: name-to-person resolution with ambiguity
+  candidates.
 - `backend/app/cli/audio.py`: enrollment, import, status, and recovery commands.
+- `backend/app/cli/briefing.py`: print a briefing by person ID or by name.
 - `backend/alembic/versions/`: baseline and audio migrations.
 - [Database structure](backend/DB_STRUCTURE.md): current storage contracts.
 
 Text ingestion resolves people by their single name; audio ingestion uses the
 face tracker's person's UUID. The face recognizer automatically creates unknown
-people, and the frontend tracker accepts a real identity source. Authenticated HTTP
-enrollment, login/onboarding, a conversations UI, and semantic retrieval are not
-implemented. The FastAPI users router remains a stub. The unused text-embedding
+people, and the frontend tracker accepts a real identity source. Person briefings
+read memories back by face or by name. Authenticated HTTP enrollment and
+briefing routes, login/onboarding, a conversations UI, fact ranking, question
+answering over past conversations, and semantic retrieval are not implemented. The FastAPI users router remains a stub. The unused text-embedding
 hook was removed; no semantic vectors were being persisted by it.
 
 ## Tests
@@ -208,8 +241,8 @@ node --test frontend/interlocutorTracker.test.mjs
 The default tests use real WAV files and SQLite storage with deterministic model
 substitutes. They exercise automatic face creation, face-to-audio identity handoff,
 voice discovery and enrollment, matching, capture boundaries, ASR
-slices, identity preservation, failures, retry fencing, atomic commits, and real
-Alembic upgrades/downgrades. PostgreSQL migration SQL is compiled offline.
+slices, identity preservation, failures, retry fencing, atomic commits, person
+briefings on both paths with owner isolation, and real Alembic upgrades/downgrades. PostgreSQL migration SQL is compiled offline.
 `--runslow` enables optional real Whisper tests. Default tests neither download
 model weights nor call paid LLM APIs; they do not establish real-world diarization
 or voice-matching accuracy.
