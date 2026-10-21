@@ -28,7 +28,14 @@ class BriefingService:
         _check_max_facts(max_facts)
         resolved = self.resolver.resolve_person_from_query(name)
         if resolved.is_ambiguous:
-            return BriefAmbiguous(candidates=resolved.candidates)
+            # Hints arrive unbounded and newest first; keep the top max_facts per category.
+            candidates = [
+                c.model_copy(update={"hints": {
+                    category: texts[:max_facts] for category, texts in c.hints.items() if max_facts
+                }})
+                for c in resolved.candidates
+            ]
+            return BriefAmbiguous(candidates=candidates)
         if resolved.person_id is None:
             return BriefNotFound(message=f"There is no one in your memory named {name.strip()}.")
         brief = self._build(resolved.person_id, max_facts=max_facts, include_visual=True)

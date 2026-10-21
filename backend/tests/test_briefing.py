@@ -186,6 +186,24 @@ def test_name_path_returns_candidates_when_ambiguous(store, service):
     assert hints[smith] == {"affiliation": ["Works at Acme"]}
 
 
+def test_ambiguous_candidate_hints_are_capped_at_max_facts(store, service):
+    smith = add_person(store, "Alex", "Smith")
+    add_person(store, "Alex", "Johnson")
+    add_facts(store, smith, "hobby", [f"hobby {i}" for i in range(7)])
+    add_facts(store, smith, "affiliation", ["Works at Acme"])
+
+    def smith_hints(**kwargs):
+        result = service.brief_by_name("Alex", **kwargs)
+        return next(c.hints for c in result.candidates if c.person_id == smith)
+
+    assert smith_hints() == {
+        "affiliation": ["Works at Acme"],
+        "hobby": ["hobby 6", "hobby 5", "hobby 4", "hobby 3", "hobby 2"],
+    }
+    assert smith_hints(max_facts=2)["hobby"] == ["hobby 6", "hobby 5"]
+    assert smith_hints(max_facts=0) == {}
+
+
 def test_name_path_reports_unknown_name(service, sam):
     result = service.brief_by_name("  Zara  ")
     assert result.status == "not_found"
