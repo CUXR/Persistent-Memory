@@ -32,6 +32,12 @@ def _person_name(person: Person) -> str:
     return person.display_name or f"{person.first_name} {person.last_name}".strip()
 
 
+def is_unnamed(person: Person) -> bool:
+    """Return True for a face-created placeholder that no one has named yet."""
+
+    return person.display_name == f"Unknown person {person.id}"
+
+
 class PersonResolver:
     """Resolve the subject of a user query to a known person.
 
@@ -65,7 +71,8 @@ class PersonResolver:
         if not cleaned:
             return _no_match()
 
-        people = self.store.list_people()
+        # Unnamed placeholders share first_name "Unknown"; never match them by name.
+        people = [p for p in self.store.list_people() if not is_unnamed(p)]
         if not people:
             return _no_match()
 
@@ -132,4 +139,4 @@ def _no_match() -> ResolveResult:
     )
 
 
-__all__ = ["PersonResolver"]
+__all__ = ["PersonResolver", "is_unnamed"]
