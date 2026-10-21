@@ -159,6 +159,22 @@ def test_name_path_returns_brief_with_visual_descriptors(service, sam):
     assert len(result.brief.hobbies) == len(result.brief.affiliations) == 3
 
 
+def test_name_path_includes_latest_interaction(store, service, sam):
+    add_episode(store, sam, T0, "Talked about climbing.")
+    add_episode(store, sam, T0 + timedelta(days=3), "Talked about her internship.")
+    last = service.brief_by_name("Sam").brief.last_interaction
+    assert last.summary == "Talked about her internship."
+    assert last.date == T0 + timedelta(days=3)
+
+
+def test_name_path_without_visual_facts_returns_empty_list(store, service):
+    person_id = add_person(store, "Priya", "Sharma")
+    add_facts(store, person_id, "hobby", ["Paints"])
+    brief = service.brief_by_name("Priya").brief
+    assert brief.visual_descriptors == []
+    assert brief.hobbies == ["Paints"]
+
+
 def test_name_path_returns_candidates_when_ambiguous(store, service):
     smith = add_person(store, "Alex", "Smith")
     johnson = add_person(store, "Alex", "Johnson")
