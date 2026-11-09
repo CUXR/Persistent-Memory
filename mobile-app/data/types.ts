@@ -83,7 +83,8 @@ export type EpisodeSummary = {
   id: string;
   startTime: ISODateString;
   endTime?: ISODateString;
-  people: PersonRef[];
+  // The glasses only support one other person per conversation.
+  person: PersonRef;
   summary: string;
   importanceScore?: number;
 };

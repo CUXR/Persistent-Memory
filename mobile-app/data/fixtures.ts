@@ -153,7 +153,7 @@ type StoredPerson = { id: string; firstName: string; lastName: string; unnamed: 
 type StoredTurn = Omit<TranscriptTurn, "speakerLabel">;
 type StoredEpisode = {
   id: string;
-  personIds: string[];
+  personId: string;
   startTime: number;
   turns: StoredTurn[];
   topic: number;
@@ -205,12 +205,10 @@ function buildStore(now: number) {
   let clock = now - 25 * MINUTE;
   for (let i = 0; i < 38; i++) {
     const primary = people[i % people.length];
-    const others = people.filter((p) => p !== primary && !p.unnamed);
-    const personIds = rand() < 0.2 ? [primary.id, others[int(0, others.length - 1)].id] : [primary.id];
     // Dialogue offsets stay even so every transcript opens with the other person speaking.
     episodes.push({
       id: uuid(),
-      personIds,
+      personId: primary.id,
       startTime: clock,
       turns: makeTurns(primary.id, int(6, 15), int(0, 6) * 2),
       topic: int(0, TOPICS.length - 1),
@@ -223,7 +221,7 @@ function buildStore(now: number) {
   const categories: FactCategory[] = ["hobby", "affiliation", "hobby", "visual_descriptor", "affiliation"];
   people.forEach((person, i) => {
     const count = person.unnamed ? int(0, 1) : i === 0 ? 20 : int(2, 8);
-    const own = episodes.filter((e) => e.personIds[0] === person.id);
+    const own = episodes.filter((e) => e.personId === person.id);
     // Walk each category's pool in order so a person never gets the same fact twice.
     const used: Record<FactCategory, number> = { hobby: 0, affiliation: 0, visual_descriptor: 0 };
     for (let j = 0; j < count; j++) {
@@ -334,14 +332,14 @@ export function createFixtureDataSource(getScenario: () => FixtureScenario): Dat
   const durationMs = (turns: StoredTurn[]) => (turns.length ? turns[turns.length - 1].endSeconds * 1000 : 0);
 
   const episodeSummary = (e: StoredEpisode): EpisodeSummary => {
-    const lead = personRef(e.personIds[0]);
-    const subject = lead.isUnnamed ? "They" : lead.displayName.split(" ")[0];
+    const person = personRef(e.personId);
+    const subject = person.isUnnamed ? "They" : person.displayName.split(" ")[0];
     return {
       kind: "episode",
       id: e.id,
       startTime: iso(e.startTime),
       endTime: iso(e.startTime + durationMs(e.turns)),
-      people: e.personIds.map(personRef),
+      person,
       summary: `${subject} ${TOPICS[e.topic]}`,
       importanceScore: e.importanceScore,
     };
@@ -359,7 +357,7 @@ export function createFixtureDataSource(getScenario: () => FixtureScenario): Dat
   });
 
   const toPerson = (p: StoredPerson): Person => {
-    const own = store.episodes.filter((e) => e.personIds.includes(p.id));
+    const own = store.episodes.filter((e) => e.personId === p.id);
     return {
       ...personRef(p.id),
       firstName: p.firstName,
@@ -411,7 +409,7 @@ export function createFixtureDataSource(getScenario: () => FixtureScenario): Dat
           .map((e) => ({ e, summary: episodeSummary(e) }))
           .filter(
             ({ e, summary }) =>
-              !q || matchesPeople(e.personIds) || matchesTurns(e.turns) || summary.summary.toLowerCase().includes(q),
+              !q || matchesPeople([e.personId]) || matchesTurns(e.turns) || summary.summary.toLowerCase().includes(q),
           )
           .map(({ summary }) => summary),
       ].sort((a, b) => b.startTime.localeCompare(a.startTime));
@@ -460,7 +458,7 @@ export function createFixtureDataSource(getScenario: () => FixtureScenario): Dat
       await simulate("read");
       const p = findPerson(id);
       if (!p || isEmpty()) throw notFound("person");
-      const own = store.episodes.filter((e) => e.personIds.includes(id));
+      const own = store.episodes.filter((e) => e.personId === id);
       const latest = own[0];
       const index = store.people.indexOf(p);
       return {
@@ -512,7 +510,7 @@ export function createFixtureDataSource(getScenario: () => FixtureScenario): Dat
           .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
           .slice(0, BRIEF_MAX_FACTS)
           .map((f) => f.text);
-      const latest = store.episodes.find((e) => e.personIds.includes(personId));
+      const latest = store.episodes.find((e) => e.personId === personId);
       const brief: Brief = {
         personId,
         displayName: p.unnamed ? undefined : displayName(p),

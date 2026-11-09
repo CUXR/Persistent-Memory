@@ -11,7 +11,7 @@ import type { HistoryItem, RecordingSummary } from "@/data/types";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { usePagedList } from "@/hooks/use-paged-list";
 import { useTheme } from "@/hooks/use-theme";
-import { formatDateTime, joinPeople } from "@/lib/format";
+import { formatDateTime, personLabel } from "@/lib/format";
 import { openHistoryItem } from "@/lib/routes";
 
 function recordingSubtitle(r: RecordingSummary) {
@@ -33,13 +33,12 @@ export default function HistoryScreen() {
 
   const renderItem = ({ item }: { item: HistoryItem }) => {
     if (item.kind === "episode") {
-      const lead = item.people[0];
       return (
         <ListRow
-          title={joinPeople(item.people)}
+          title={personLabel(item.person)}
           meta={formatDateTime(item.startTime)}
           subtitle={item.summary}
-          leading={lead ? <Avatar id={lead.id} name={lead.displayName} /> : undefined}
+          leading={<Avatar id={item.person.id} name={item.person.displayName} />}
           onPress={() => openHistoryItem(item)}
         />
       );
@@ -47,7 +46,7 @@ export default function HistoryScreen() {
     const accent = item.status === "failed" ? colors.danger : colors.warning;
     return (
       <ListRow
-        title={joinPeople([item.person])}
+        title={personLabel(item.person)}
         meta={formatDateTime(item.startTime)}
         subtitle={recordingSubtitle(item)}
         tentative

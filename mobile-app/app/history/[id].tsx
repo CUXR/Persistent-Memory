@@ -80,7 +80,7 @@ function EpisodeHeader({ episode }: { episode: Episode }) {
         </AppText>
         <MemoryBadge state="saved" />
       </View>
-      <PeopleChips people={episode.people} />
+      <PersonChip person={episode.person} />
 
       {episode.summary ? (
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
@@ -197,7 +197,7 @@ function RecordingHeader({ recording }: { recording: Recording }) {
         </AppText>
         <MemoryBadge state={recording.status} />
       </View>
-      <PeopleChips people={[recording.person]} />
+      <PersonChip person={recording.person} />
 
       <View style={[styles.banner, { backgroundColor: bg, borderColor: fg }]}>
         <Ionicons name={failed ? "close-circle-outline" : "hourglass-outline"} size={18} color={fg} />
@@ -225,24 +225,21 @@ function RecordingHeader({ recording }: { recording: Recording }) {
   );
 }
 
-function PeopleChips({ people }: { people: PersonRef[] }) {
+function PersonChip({ person }: { person: PersonRef }) {
   const colors = useTheme();
   return (
     <View style={styles.people}>
-      {people.map((person) => (
-        <Pressable
-          key={person.id}
-          accessibilityRole="link"
-          accessibilityLabel={`Open ${personLabel(person)}`}
-          onPress={() => openPerson(person.id)}
-          style={({ pressed }) => [styles.personChip, { backgroundColor: pressed ? colors.border : colors.surface }]}
-        >
-          <Avatar id={person.id} name={person.displayName} size={22} />
-          <AppText variant="caption" style={styles.chipText}>
-            {personLabel(person)}
-          </AppText>
-        </Pressable>
-      ))}
+      <Pressable
+        accessibilityRole="link"
+        accessibilityLabel={`Open ${personLabel(person)}`}
+        onPress={() => openPerson(person.id)}
+        style={({ pressed }) => [styles.personChip, { backgroundColor: pressed ? colors.border : colors.surface }]}
+      >
+        <Avatar id={person.id} name={person.displayName} size={22} />
+        <AppText variant="caption" style={styles.chipText}>
+          {personLabel(person)}
+        </AppText>
+      </Pressable>
     </View>
   );
 }
