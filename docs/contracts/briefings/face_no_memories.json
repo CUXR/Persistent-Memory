@@ -1,0 +1,29 @@
+{
+  "description": "Face path for a named person with no facts or conversations: empty pages.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a5",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "person_id": "00000000-0000-4000-8000-0000000000a5",
+      "display_mode": "name_and_facts",
+      "display_name": "Priya Sharma",
+      "is_unnamed": false,
+      "hobbies": {
+        "items": [],
+        "next_cursor": null
+      },
+      "affiliations": {
+        "items": [],
+        "next_cursor": null
+      },
+      "visual_descriptors": null,
+      "last_interaction": null
+    }
+  }
+}

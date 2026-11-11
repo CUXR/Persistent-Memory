@@ -1,0 +1,36 @@
+{
+  "description": "Name path, several matches: candidates with hints capped at max_facts per category.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/by-name?name=Alex",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "status": "ambiguous",
+      "candidates": [
+        {
+          "person_id": "00000000-0000-4000-8000-0000000000a4",
+          "name": "Alex Johnson",
+          "hints": {
+            "visual_descriptor": [
+              "Tall, glasses"
+            ]
+          }
+        },
+        {
+          "person_id": "00000000-0000-4000-8000-0000000000a3",
+          "name": "Alex Smith",
+          "hints": {
+            "affiliation": [
+              "Works at Acme Robotics"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

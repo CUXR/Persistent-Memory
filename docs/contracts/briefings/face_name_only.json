@@ -1,0 +1,23 @@
+{
+  "description": "Face path with the owner's mode set to name: no facts or last interaction.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a1",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "person_id": "00000000-0000-4000-8000-0000000000a1",
+      "display_mode": "name",
+      "display_name": "Sam Lee",
+      "is_unnamed": false,
+      "hobbies": null,
+      "affiliations": null,
+      "visual_descriptors": null,
+      "last_interaction": null
+    }
+  }
+}

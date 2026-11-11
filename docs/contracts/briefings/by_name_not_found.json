@@ -1,0 +1,17 @@
+{
+  "description": "Name path, no match. Unnamed people never match a name.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/by-name?name=Zara",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "status": "not_found",
+      "message": "There is no one in your memory named Zara."
+    }
+  }
+}

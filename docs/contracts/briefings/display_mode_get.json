@@ -1,0 +1,16 @@
+{
+  "description": "The owner's glasses display mode. Defaults to name_and_facts.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/display-mode",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "display_mode": "name_and_facts"
+    }
+  }
+}

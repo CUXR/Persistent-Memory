@@ -1,0 +1,16 @@
+{
+  "description": "Malformed cursor, or one from an older fact ordering.",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/facts?cursor=bm90LWEtY3Vyc29y",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "detail": "Invalid cursor"
+    }
+  }
+}

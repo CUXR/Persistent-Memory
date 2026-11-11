@@ -1,0 +1,13 @@
+{
+  "description": "Missing, unknown, or revoked bearer token (any route).",
+  "request": {
+    "method": "GET",
+    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a1"
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "detail": "Invalid or missing bearer token"
+    }
+  }
+}
