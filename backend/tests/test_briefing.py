@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.crud.briefing_queries import PersonNotFoundError
+from app.crud.briefing_queries import CURSOR_VERSION, FactCursor, InvalidCursorError, PersonNotFoundError
 from app.crud.memory_store import MemoryStore
 from app.models.episode import Episode
 from app.models.memory import EpisodeParticipant
@@ -43,6 +43,10 @@ def add_person(store, first, last="", *, owner_id=None, unnamed=False):
             display_name=f"Unknown person {person_id}" if unnamed else f"{first} {last}".strip(),
         ))
     return person_id
+
+
+def texts(page):
+    return [fact.text for fact in page.items]
 
 
 def add_facts(store, person_id, category, texts):
@@ -88,20 +92,20 @@ def sam(store):
 
 def test_brief_caps_each_category_at_max_facts(service, sam):
     brief = service.brief(sam)
-    assert len(brief.hobbies) == 5
-    assert len(brief.affiliations) == 5
+    assert len(brief.hobbies.items) == 5
+    assert len(brief.affiliations.items) == 5
     small = service.brief(sam, max_facts=2)
-    assert small.hobbies == ["hobby 6", "hobby 5"]
-    assert small.affiliations == ["affiliation 6", "affiliation 5"]
-    assert service.brief(sam, max_facts=0).hobbies == []
+    assert texts(small.hobbies) == ["hobby 6", "hobby 5"]
+    assert texts(small.affiliations) == ["affiliation 6", "affiliation 5"]
+    assert service.brief(sam, max_facts=0).hobbies.items == []
 
 
 def test_brief_returns_facts_in_rank_order(service, sam):
-    assert service.brief(sam).hobbies == ["hobby 6", "hobby 5", "hobby 4", "hobby 3", "hobby 2"]
+    assert texts(service.brief(sam).hobbies) == ["hobby 6", "hobby 5", "hobby 4", "hobby 3", "hobby 2"]
 
 
 def test_face_path_never_includes_visual_descriptors(service, sam):
-    assert service.brief(sam).visual_descriptors == []
+    assert service.brief(sam).visual_descriptors is None
 
 
 def test_brief_names_a_named_person(service, sam):
@@ -116,7 +120,7 @@ def test_unnamed_person_has_no_fake_name(store, service):
     brief = service.brief(person_id)
     assert brief.is_unnamed is True
     assert brief.display_name is None
-    assert brief.hobbies == brief.affiliations == []
+    assert texts(brief.hobbies) == texts(brief.affiliations) == []
     assert brief.last_interaction is None
 
 
@@ -155,8 +159,8 @@ def test_name_path_returns_brief_with_visual_descriptors(service, sam):
     result = service.brief_by_name("Sam", max_facts=3)
     assert result.status == "found"
     assert result.brief.person_id == sam
-    assert result.brief.visual_descriptors == ["visual 6", "visual 5", "visual 4"]
-    assert len(result.brief.hobbies) == len(result.brief.affiliations) == 3
+    assert texts(result.brief.visual_descriptors) == ["visual 6", "visual 5", "visual 4"]
+    assert len(result.brief.hobbies.items) == len(result.brief.affiliations.items) == 3
 
 
 def test_name_path_includes_latest_interaction(store, service, sam):
@@ -167,12 +171,13 @@ def test_name_path_includes_latest_interaction(store, service, sam):
     assert last.date == T0 + timedelta(days=3)
 
 
-def test_name_path_without_visual_facts_returns_empty_list(store, service):
+def test_name_path_without_visual_facts_returns_empty_page(store, service):
     person_id = add_person(store, "Priya", "Sharma")
     add_facts(store, person_id, "hobby", ["Paints"])
     brief = service.brief_by_name("Priya").brief
-    assert brief.visual_descriptors == []
-    assert brief.hobbies == ["Paints"]
+    assert brief.visual_descriptors.items == []
+    assert brief.visual_descriptors.next_cursor is None
+    assert texts(brief.hobbies) == ["Paints"]
 
 
 def test_name_path_returns_candidates_when_ambiguous(store, service):
@@ -229,6 +234,141 @@ def test_name_path_ignores_other_owners_people(store, service):
     assert service.brief_by_name("Sam").status == "not_found"
 
 
+# ── Pagination ───────────────────────────────────────────
+
+
+def walk(service, first_page, limit):
+    seen, page = texts(first_page), first_page
+    while page.next_cursor:
+        page = service.more_facts(page.next_cursor, limit=limit)
+        seen += texts(page)
+    return seen
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 7, 50])
+def test_pages_cover_every_fact_once_in_rank_order(service, sam, limit):
+    first = service.brief(sam, max_facts=limit).hobbies
+    assert walk(service, first, limit) == [f"hobby {i}" for i in range(6, -1, -1)]
+
+
+def test_pages_break_timestamp_ties_without_skips_or_repeats(store, service):
+    person_id = add_person(store, "Tie")
+    with store.Session.begin() as session:
+        for i in range(9):
+            session.add(PersonFact(person_id=person_id, fact_text=f"same {i}",
+                                   fact_category="hobby", created_at=T0))
+    first = service.brief(person_id, max_facts=2).hobbies
+    assert sorted(walk(service, first, 2)) == sorted(f"same {i}" for i in range(9))
+
+
+def test_last_page_has_no_cursor(service, sam):
+    assert service.brief(sam, max_facts=7).hobbies.next_cursor is None
+    assert service.brief(sam, max_facts=6).hobbies.next_cursor is not None
+
+
+def test_more_facts_reports_person_and_category(service, sam):
+    cursor = service.brief_by_name("Sam", max_facts=2).brief.visual_descriptors.next_cursor
+    page = service.more_facts(cursor, limit=2)
+    assert (page.person_id, page.category) == (sam, "visual_descriptor")
+    assert texts(page) == ["visual 4", "visual 3"]
+
+
+def test_page_size_is_bounded(service, sam):
+    with pytest.raises(ValueError):
+        service.brief(sam, max_facts=51)
+    cursor = service.brief(sam, max_facts=1).hobbies.next_cursor
+    with pytest.raises(ValueError):
+        service.more_facts(cursor, limit=51)
+
+
+@pytest.mark.parametrize("cursor", [
+    "not base64!", "e30", "W10",  # garbage, {}, []
+    FactCursor(uuid4(), "hobby", T0, uuid4()).encode().replace("A", "B", 1)[:-3],
+])
+def test_malformed_cursor_is_rejected(service, cursor):
+    with pytest.raises(InvalidCursorError):
+        service.more_facts(cursor)
+
+
+def test_cursor_from_other_ordering_version_is_rejected(service, sam, monkeypatch):
+    cursor = service.brief(sam, max_facts=1).hobbies.next_cursor
+    monkeypatch.setattr("app.crud.briefing_queries.CURSOR_VERSION", CURSOR_VERSION + 1)
+    with pytest.raises(InvalidCursorError):
+        service.more_facts(cursor)
+
+
+def test_cursor_for_other_owners_person_is_not_found(store, service):
+    other_owner = uuid4()
+    add_user(store, other_owner)
+    theirs = add_person(store, "Sam", "Lee", owner_id=other_owner)
+    add_facts(store, theirs, "hobby", ["a", "b"])
+    their_service = BriefingService(MemoryStore.from_session_factory(store.Session, owner_user_id=other_owner))
+    cursor = their_service.brief(theirs, max_facts=1).hobbies.next_cursor
+    with pytest.raises(PersonNotFoundError):
+        service.more_facts(cursor)
+
+
+# ── Display modes ────────────────────────────────────────────
+
+
+def test_default_display_mode_is_name_and_facts(service, sam):
+    assert service.display_mode() == "name_and_facts"
+    assert service.brief(sam).display_mode == "name_and_facts"
+
+
+def test_name_mode_shows_only_the_name(service, sam, store):
+    add_episode(store, sam, T0, "Talked about climbing.")
+    brief = service.brief(sam, display_mode="name")
+    assert brief.display_name == "Sam Lee"
+    assert brief.hobbies is brief.affiliations is brief.last_interaction is None
+
+
+def test_nothing_mode_shows_nothing(service, sam):
+    brief = service.brief(sam, display_mode="nothing")
+    assert brief.person_id == sam
+    assert brief.display_name is None
+    assert brief.is_unnamed is False
+    assert brief.hobbies is brief.affiliations is brief.visual_descriptors is None
+
+
+def test_name_mode_for_unnamed_person_has_no_name(store, service):
+    person_id = add_person(store, "Unknown", unnamed=True)
+    brief = service.brief(person_id, display_mode="name")
+    assert (brief.display_name, brief.is_unnamed) == (None, True)
+
+
+def test_stored_display_mode_applies_to_face_path_only(service, sam):
+    assert service.set_display_mode("name") == "name"
+    assert service.display_mode() == "name"
+    assert service.brief(sam).hobbies is None
+    named = service.brief_by_name("Sam").brief
+    assert named.display_mode == "name_and_facts"
+    assert texts(named.visual_descriptors)
+
+
+def test_display_mode_keeps_other_preferences(store, service):
+    with store.Session.begin() as session:
+        session.get(User, store.owner_user_id).preferences = {"theme": "dark"}
+    service.set_display_mode("nothing")
+    with store.Session() as session:
+        assert session.get(User, store.owner_user_id).preferences == {
+            "theme": "dark", "glasses_display_mode": "nothing"}
+
+
+def test_unrecognized_stored_mode_falls_back_to_default(store, service):
+    with store.Session.begin() as session:
+        session.get(User, store.owner_user_id).preferences = {"glasses_display_mode": "one_fact"}
+    assert service.display_mode() == "name_and_facts"
+
+
+def test_display_mode_is_per_owner(store, service):
+    other_owner = uuid4()
+    add_user(store, other_owner)
+    service.set_display_mode("nothing")
+    theirs = BriefingService(MemoryStore.from_session_factory(store.Session, owner_user_id=other_owner))
+    assert theirs.display_mode() == "name_and_facts"
+
+
 # ── CLI ──────────────────────────────────────────────────────
 
 
@@ -247,14 +387,22 @@ def test_cli_prints_both_paths(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["briefing", *owner, "brief", str(person_id)])
     cli.main()
     face = json.loads(capsys.readouterr().out)
-    assert face["hobbies"] == ["Runs"]
-    assert face["visual_descriptors"] == []
+    assert [f["text"] for f in face["hobbies"]["items"]] == ["Runs"]
+    assert face["visual_descriptors"] is None
 
     monkeypatch.setattr(sys, "argv", ["briefing", *owner, "by-name", "Sam"])
     cli.main()
     named = json.loads(capsys.readouterr().out)
     assert named["status"] == "found"
-    assert named["brief"]["visual_descriptors"] == ["Red jacket"]
+    assert [f["text"] for f in named["brief"]["visual_descriptors"]["items"]] == ["Red jacket"]
+
+    monkeypatch.setattr(sys, "argv", ["briefing", *owner, "more", face["hobbies"]["next_cursor"]])
+    cli.main()
+    assert [f["text"] for f in json.loads(capsys.readouterr().out)["items"]] == ["Climbs"]
+
+    monkeypatch.setattr(sys, "argv", ["briefing", *owner, "brief", str(person_id), "--mode", "name"])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["hobbies"] is None
 
     monkeypatch.setattr(sys, "argv", ["briefing", *owner, "brief", str(uuid4())])
     with pytest.raises(SystemExit) as exc:
