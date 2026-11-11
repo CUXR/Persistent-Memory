@@ -7,9 +7,11 @@ so the wearer can look them up later.
 ## Status
 
 The pieces exist and are tested individually, but there is **no end-to-end
-runnable pipeline yet**. Missing: live microphone capture and a background
-worker, camera-to-tracker transport, an HTTP API (the FastAPI router is a stub),
-a UI, and retrieval of stored memories. See the open issues for what's next.
+runnable pipeline yet**. The HTTP API has one feature so far: token-authenticated
+person briefings, which show what to remember about someone by face or by name
+([contract](docs/contracts/briefings/README.md)). Missing: live microphone
+capture and a background worker, camera and audio upload endpoints, conversation
+and people read APIs, a UI, and fact ranking. See the open issues for what's next.
 
 ## How it fits together
 
@@ -29,6 +31,8 @@ mic ─→ VAD capture ─→ WAV ─→ diarization ─→ voice matching ─�
 | Whisper transcription and dialog assembly | `backend/app/services/asr*.py` |
 | Recording-to-memory coordinator, retries, voice enrollment | `backend/app/services/audio_memory.py`, `voice_enrollment.py` |
 | LLM extraction and the transactional memory write | `backend/app/services/conversation_ingestion.py`, `llm_client.py`, `crud/conversations.py` |
+| Person briefings: name, top facts, and last conversation, paged and owner-scoped | `backend/app/services/briefing.py`, `api/routes/briefing.py`, [contract](docs/contracts/briefings/README.md) |
+| HTTP auth: bearer tokens mapped to an owner | `backend/app/api/deps.py`, `python -m app.cli.tokens --help` |
 | Schema and migrations | `backend/app/models/`, `backend/alembic/`, [DB_STRUCTURE.md](backend/DB_STRUCTURE.md) |
 | CLI for processing a recorded file | `python -m app.cli.audio --help` |
 
@@ -55,6 +59,16 @@ Optional components:
 - **Face recognition:** `pip install -r services/requirements_face.txt`
   (needs a C++ compiler for insightface).
 - **LLM extraction:** set `OPENAI_API_KEY`.
+
+Run the API and call it with a token:
+
+```sh
+uvicorn app.main:app --reload
+python -m app.cli.tokens create --owner-id USER_UUID --label "my laptop"
+curl -H "Authorization: Bearer TOKEN" localhost:8000/briefings/by-name?name=Sam
+```
+
+Interactive docs are at `localhost:8000/docs`.
 
 ## Tests
 
