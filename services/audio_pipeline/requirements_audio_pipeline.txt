@@ -3,7 +3,8 @@
 # Accept HF terms for Community-1 and pyannote/embedding; set HF_TOKEN.
 pyannote.audio==4.0.4
 silero-vad>=6.0,<7
-# Keep native PyTorch extensions on a compatible release set.
+# torchaudio and torchcodec are not imported directly; pyannote needs them.
+# They are pinned because pip would otherwise pair newer releases with torch 2.8.
 # https://github.com/meta-pytorch/torchcodec#compatibility-with-torch-versions
 torch==2.8.0
 torchaudio==2.8.0

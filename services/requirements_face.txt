@@ -1,0 +1,8 @@
+# From the repository root, inside a Python 3.12 venv:
+# pip install -r services/requirements_face.txt
+# insightface ships only as source, so building it needs a C++ compiler.
+insightface==0.7.3
+# insightface needs an ONNX runtime but does not declare one.
+onnxruntime>=1.20,<2
+faiss-cpu>=1.9,<2
+opencv-python>=4.10,<5
