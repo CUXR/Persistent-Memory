@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.crud.memory_store import MemoryStore
+from app.models.person import Person
 from app.models.user import User
 from app.crud.person_resolver import PersonResolver
 
@@ -247,3 +248,27 @@ class TestMultiplePeople:
         assert r1.person_id == emily.id
         assert r2.person_id == john.id
         assert r1.person_id != r2.person_id
+
+
+# ── Unnamed placeholders ────────────────────────────────────
+
+
+class TestUnnamedPeople:
+    """Face-created "Unknown person" placeholders never match a name query."""
+
+    def test_unknown_does_not_match_placeholders(self, store, resolver):
+        with store.Session.begin() as session:
+            for _ in range(2):
+                person_id = uuid4()
+                session.add(Person(id=person_id, user_id=store.owner_user_id, first_name="Unknown",
+                                   display_name=f"Unknown person {person_id}"))
+        result = resolver.resolve_person_from_query("Unknown")
+        assert result.person_id is None
+        assert result.is_ambiguous is False
+
+    def test_named_person_still_resolves_beside_placeholder(self, store, resolver, emily):
+        with store.Session.begin() as session:
+            person_id = uuid4()
+            session.add(Person(id=person_id, user_id=store.owner_user_id, first_name="Unknown",
+                               display_name=f"Unknown person {person_id}"))
+        assert resolver.resolve_person_from_query("Emily").person_id == emily.id

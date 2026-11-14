@@ -1,0 +1,24 @@
+{
+  "description": "Continue Sam's hobbies from brief's hobbies.next_cursor. next_cursor is null on the last page.",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/facts?category=hobby&cursor=eyJ2IjoxLCJwIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGExIiwiYyI6ImhvYmJ5IiwidCI6IjIwMjYtMDEtMDFUMDA6MDE6MDAiLCJpIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwZjExIn0&limit=2",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000f10",
+          "text": "Bakes sourdough"
+        }
+      ],
+      "next_cursor": null,
+      "person_id": "00000000-0000-4000-8000-0000000000a1",
+      "category": "hobby"
+    }
+  }
+}

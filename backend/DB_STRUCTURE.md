@@ -2,8 +2,22 @@
 
 SQLAlchemy models in `app/models/` are the application schema. Alembic revisions
 `0001_baseline`, `0002_audio_memory`, and `0003_voice_discovery` establish the schema
-and add audio support and voice-discovery provenance. See the root README for
-the unversioned-database upgrade procedure.
+and add audio support and voice-discovery provenance.
+
+## Upgrading a database created before migrations
+
+For a database created by `create_all` with no Alembic version, back it up and
+confirm its schema matches `0001_baseline`, then run from the repository root:
+
+```sh
+alembic -c backend/alembic.ini stamp 0001_baseline
+alembic -c backend/alembic.ini upgrade head
+```
+
+Do not stamp an empty or different schema. The baseline uses 512-dimensional
+face vectors; databases with a custom `EMBEDDING_DIMENSION` need a tailored
+migration. Existing voice vectors with missing or incompatible model metadata
+need re-enrollment.
 
 ## People and voice profiles
 

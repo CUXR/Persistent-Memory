@@ -1,0 +1,31 @@
+{
+  "description": "A named person with no facts or conversations: empty pages.",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-0000000000a5/briefing",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "person_id": "00000000-0000-4000-8000-0000000000a5",
+      "display_name": "Priya Sharma",
+      "is_unnamed": false,
+      "hobbies": {
+        "items": [],
+        "next_cursor": null
+      },
+      "affiliations": {
+        "items": [],
+        "next_cursor": null
+      },
+      "visual_descriptors": {
+        "items": [],
+        "next_cursor": null
+      },
+      "last_interaction": null
+    }
+  }
+}

@@ -83,6 +83,19 @@ class MemoryStore:
         self._Session: Optional[sessionmaker[Session]] = None
         logger.info("MemoryStore created (owner=%s)", owner_user_id)
 
+    @classmethod
+    def from_session_factory(
+        cls, session_factory: sessionmaker[Session], *, owner_user_id: UUID,
+    ) -> "MemoryStore":
+        """Bind a store to an existing session factory, e.g. one per HTTP request.
+
+        The store does not own the engine, so close() leaves it open.
+        """
+
+        store = cls("unused://", owner_user_id=owner_user_id)
+        store._Session = session_factory
+        return store
+
     @property
     def owner_user_id(self) -> UUID:
         """The UUID of the owner user scoping all operations."""
