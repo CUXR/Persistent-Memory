@@ -65,7 +65,7 @@ Run the API and call it with a token:
 ```sh
 uvicorn app.main:app --reload
 python -m app.cli.tokens create --owner-id USER_UUID --label "my laptop"
-curl -H "Authorization: Bearer TOKEN" localhost:8000/briefings/by-name?name=Sam
+curl -H "Authorization: Bearer TOKEN" "localhost:8000/people/briefing?name=Sam"
 ```
 
 Interactive docs are at `localhost:8000/docs`.

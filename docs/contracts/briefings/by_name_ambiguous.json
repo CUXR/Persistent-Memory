@@ -1,8 +1,8 @@
 {
-  "description": "Name path, several matches: candidates with hints capped at max_facts per category.",
+  "description": "Name lookup, several matches: candidates with hints capped at max_facts per category. After the wearer picks, call /people/{id}/briefing.",
   "request": {
     "method": "GET",
-    "path": "/briefings/by-name?name=Alex",
+    "path": "/people/briefing?name=Alex",
     "headers": {
       "Authorization": "Bearer <token>"
     }

@@ -1,4 +1,4 @@
-"""HTTP briefings: bearer auth, owner isolation, pagination, display mode, contract fixtures.
+"""HTTP briefings: bearer auth, owner isolation, pagination, contract fixtures.
 
 Contract fixtures in docs/contracts/briefings/ are checked against live responses.
 After an intended contract change, regenerate them with:
@@ -131,28 +131,26 @@ def scenario(store):
 # ── Authentication ───────────────────────────────────────────
 
 ROUTES = [
-    ("GET", f"/briefings/people/{SAM}"),
-    ("GET", "/briefings/by-name?name=Sam"),
-    ("GET", "/briefings/facts?cursor=abc"),
-    ("GET", "/briefings/display-mode"),
-    ("PUT", "/briefings/display-mode"),
+    f"/people/{SAM}/briefing",
+    "/people/briefing?name=Sam",
+    f"/people/{SAM}/facts?category=hobby",
 ]
 
 
-@pytest.mark.parametrize("method,path", ROUTES)
-def test_every_route_requires_a_bearer_token(store, scenario, method, path):
-    response = Api()(method, path, json={"display_mode": "name"})
+@pytest.mark.parametrize("path", ROUTES)
+def test_every_route_requires_a_bearer_token(store, scenario, path):
+    response = Api()("GET", path)
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.parametrize("method,path", ROUTES)
-def test_unknown_token_is_rejected(store, scenario, method, path):
-    assert Api("pm_not-a-real-token")(method, path, json={"display_mode": "name"}).status_code == 401
+@pytest.mark.parametrize("path", ROUTES)
+def test_unknown_token_is_rejected(store, scenario, path):
+    assert Api("pm_not-a-real-token")("GET", path).status_code == 401
 
 
 def test_non_bearer_scheme_is_rejected(store, scenario, api):
-    response = api("GET", f"/briefings/people/{SAM}", token=None,
+    response = api("GET", f"/people/{SAM}/briefing", token=None,
                    headers={"Authorization": f"Basic {api.token}"})
     assert response.status_code == 401
 
@@ -160,10 +158,10 @@ def test_non_bearer_scheme_is_rejected(store, scenario, api):
 def test_revoked_token_is_rejected(store, scenario):
     with store.Session.begin() as session:
         token, raw = issue_token(session, OWNER, "lost phone")
-    assert Api(raw)("GET", f"/briefings/people/{SAM}").status_code == 200
+    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 200
     with store.Session.begin() as session:
         assert revoke_token(session, token.id)
-    assert Api(raw)("GET", f"/briefings/people/{SAM}").status_code == 401
+    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 401
 
 
 def test_only_the_token_hash_is_stored(store):
@@ -191,14 +189,28 @@ def test_token_cli_issues_lists_and_revokes(store, scenario):
     assert code == 0, out
     fields = dict(line.split(":", 1) for line in out.strip().splitlines())
     token_id, raw = fields["token_id"].strip(), fields["token"].strip()
-    assert Api(raw)("GET", f"/briefings/people/{SAM}").status_code == 200
+    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 200
     code, out = cli("list", "--owner-id", str(OWNER))
     assert token_id in out and "active" in out and "RayNeo glasses" in out
     assert cli("revoke", token_id)[0] == 0
     assert "revoked" in cli("list", "--owner-id", str(OWNER))[1]
-    assert Api(raw)("GET", f"/briefings/people/{SAM}").status_code == 401
+    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 401
     assert cli("revoke", str(uuid4()))[0] != 0
     assert cli("create", "--owner-id", str(uuid4()), "--label", "x")[0] != 0
+
+
+# ── Routing ──────────────────────────────────────────────────
+
+
+def test_name_lookup_and_id_brief_agree(api, scenario):
+    by_name = api("GET", "/people/briefing?name=Sam").json()
+    assert by_name["status"] == "found"
+    assert by_name["brief"] == api("GET", f"/people/{SAM}/briefing").json()
+
+
+def test_non_uuid_person_paths_do_not_exist(api, scenario):
+    assert api("GET", "/people/sam/briefing").status_code == 404
+    assert api("GET", "/people/sam/facts?category=hobby").status_code == 404
 
 
 # ── Owner isolation ──────────────────────────────────────────
@@ -214,33 +226,29 @@ def other(store, scenario):
     return Api(token_for(store, other_owner)), their_sam
 
 
-def test_face_path_hides_other_owners_people(api, other):
+def test_briefs_hide_other_owners_people(api, other):
     their_api, their_sam = other
-    assert api("GET", f"/briefings/people/{their_sam}").status_code == 404
-    assert their_api("GET", f"/briefings/people/{SAM}").status_code == 404
+    assert api("GET", f"/people/{their_sam}/briefing").status_code == 404
+    assert their_api("GET", f"/people/{SAM}/briefing").status_code == 404
     # Indistinguishable from an ID that does not exist.
-    missing = api("GET", f"/briefings/people/{uuid4()}")
-    assert missing.json() == api("GET", f"/briefings/people/{their_sam}").json()
+    missing = api("GET", f"/people/{uuid4()}/briefing")
+    assert missing.json() == api("GET", f"/people/{their_sam}/briefing").json()
 
 
-def test_name_path_resolves_within_the_owner(api, other):
+def test_name_lookup_stays_within_the_owner(api, other):
     their_api, their_sam = other
-    assert api("GET", "/briefings/by-name?name=Sam").json()["brief"]["person_id"] == str(SAM)
-    assert their_api("GET", "/briefings/by-name?name=Sam").json()["brief"]["person_id"] == str(their_sam)
-    assert their_api("GET", "/briefings/by-name?name=Priya").json()["status"] == "not_found"
+    assert api("GET", "/people/briefing?name=Sam").json()["brief"]["person_id"] == str(SAM)
+    assert their_api("GET", "/people/briefing?name=Sam").json()["brief"]["person_id"] == str(their_sam)
+    assert their_api("GET", "/people/briefing?name=Priya").json()["status"] == "not_found"
 
 
-def test_cursor_does_not_cross_owners(api, other):
+def test_facts_do_not_cross_owners(api, other):
     their_api, their_sam = other
-    cursor = their_api("GET", f"/briefings/people/{their_sam}?max_facts=1").json()["hobbies"]["next_cursor"]
-    assert their_api("GET", f"/briefings/facts?cursor={cursor}").status_code == 200
-    assert api("GET", f"/briefings/facts?cursor={cursor}").status_code == 404
-
-
-def test_display_mode_is_per_owner(api, other):
-    their_api, _ = other
-    assert api("PUT", "/briefings/display-mode", json={"display_mode": "nothing"}).status_code == 200
-    assert their_api("GET", "/briefings/display-mode").json() == {"display_mode": "name_and_facts"}
+    cursor = their_api("GET", f"/people/{their_sam}/briefing?max_facts=1").json()["hobbies"]["next_cursor"]
+    path = f"/people/{their_sam}/facts?category=hobby&cursor={cursor}"
+    assert their_api("GET", path).status_code == 200
+    assert api("GET", path).status_code == 404
+    assert api("GET", f"/people/{their_sam}/facts?category=hobby").status_code == 404
 
 
 # ── Pagination ───────────────────────────────────────────────
@@ -249,116 +257,87 @@ def test_display_mode_is_per_owner(api, other):
 def test_pages_walk_an_arbitrary_number_of_facts(store, api):
     add_person(store, SAM, "Sam", "Lee", owner_id=OWNER)
     add_facts(store, SAM, "hobby", [f"hobby {i}" for i in range(23)])
-    page = api("GET", f"/briefings/people/{SAM}?max_facts=5").json()["hobbies"]
+    page = api("GET", f"/people/{SAM}/briefing?max_facts=5").json()["hobbies"]
     seen = [f["text"] for f in page["items"]]
     while page["next_cursor"]:
-        page = api("GET", f"/briefings/facts?cursor={page['next_cursor']}&limit=5").json()
+        page = api("GET", f"/people/{SAM}/facts?category=hobby&cursor={page['next_cursor']}&limit=5").json()
         assert len(page["items"]) <= 5
         seen += [f["text"] for f in page["items"]]
     assert seen == [f"hobby {i}" for i in range(22, -1, -1)]
 
 
+def test_cursor_must_match_person_and_category(api, scenario):
+    cursor = api("GET", f"/people/{SAM}/briefing?max_facts=1").json()["hobbies"]["next_cursor"]
+    assert api("GET", f"/people/{SAM}/facts?category=affiliation&cursor={cursor}").status_code == 400
+    assert api("GET", f"/people/{PRIYA}/facts?category=hobby&cursor={cursor}").status_code == 400
+
+
 @pytest.mark.parametrize("query", ["max_facts=0", "max_facts=51", "max_facts=two"])
 def test_page_size_is_bounded(api, scenario, query):
-    assert api("GET", f"/briefings/people/{SAM}?{query}").status_code == 422
-    assert api("GET", f"/briefings/by-name?name=Sam&{query}").status_code == 422
+    assert api("GET", f"/people/{SAM}/briefing?{query}").status_code == 422
+    assert api("GET", f"/people/briefing?name=Sam&{query}").status_code == 422
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=51", "category=pets", ""])
+def test_facts_query_is_validated(api, scenario, query):
+    if "category" not in query:
+        query = f"category=hobby&{query}" if query else ""
+    assert api("GET", f"/people/{SAM}/facts?{query}").status_code == 422
 
 
 def test_default_page_size_is_five(store, api):
     add_person(store, SAM, "Sam", "Lee", owner_id=OWNER)
     add_facts(store, SAM, "hobby", [f"hobby {i}" for i in range(8)])
-    assert len(api("GET", f"/briefings/people/{SAM}").json()["hobbies"]["items"]) == 5
-
-
-def test_continuation_limit_is_bounded(api, scenario):
-    cursor = api("GET", f"/briefings/people/{SAM}?max_facts=1").json()["hobbies"]["next_cursor"]
-    assert api("GET", f"/briefings/facts?cursor={cursor}&limit=51").status_code == 422
+    assert len(api("GET", f"/people/{SAM}/briefing").json()["hobbies"]["items"]) == 5
+    assert len(api("GET", f"/people/{SAM}/facts?category=hobby").json()["items"]) == 5
 
 
 def test_blank_name_is_rejected(api, scenario):
-    assert api("GET", "/briefings/by-name?name=%20%20").status_code == 422
-    assert api("GET", "/briefings/by-name").status_code == 422
-
-
-# ── Display mode ─────────────────────────────────────────────
-
-
-def test_display_mode_round_trips_and_drives_the_face_path(api, scenario):
-    for mode, has_name, has_facts in [("nothing", False, False), ("name", True, False),
-                                      ("name_and_facts", True, True)]:
-        assert api("PUT", "/briefings/display-mode", json={"display_mode": mode}).json() == {"display_mode": mode}
-        assert api("GET", "/briefings/display-mode").json() == {"display_mode": mode}
-        brief = api("GET", f"/briefings/people/{SAM}").json()
-        assert brief["display_mode"] == mode
-        assert (brief["display_name"] is not None) == has_name
-        assert (brief["hobbies"] is not None) == has_facts
-
-
-def test_display_mode_does_not_limit_the_name_path(api, scenario):
-    api("PUT", "/briefings/display-mode", json={"display_mode": "nothing"})
-    brief = api("GET", "/briefings/by-name?name=Sam").json()["brief"]
-    assert brief["display_name"] == "Sam Lee"
-    assert brief["visual_descriptors"]["items"]
-
-
-@pytest.mark.parametrize("body", [{"display_mode": "one_fact"}, {}, {"display_mode": None}])
-def test_unknown_display_mode_is_rejected(api, scenario, body):
-    assert api("PUT", "/briefings/display-mode", json=body).status_code == 422
+    assert api("GET", "/people/briefing?name=%20%20").status_code == 422
+    assert api("GET", "/people/briefing").status_code == 422
 
 
 # ── Contract fixtures ────────────────────────────────────────
 
-# Each case: fixture name, description, request, and an optional display mode
-# set (and then reset) around it. Cursors are filled in from earlier responses.
+# Each case: fixture name, description, method, path, and whether to send the
+# token. Cursors are filled in from earlier responses.
 CASES = [
-    ("face_name_and_facts", "Face path, mode name_and_facts: first page per category. "
-     "No visual_descriptors on the face path.", "GET", f"/briefings/people/{SAM}?max_facts=2", None, None),
-    ("facts_next_page", "Continue Sam's hobbies from face_name_and_facts's hobbies.next_cursor. "
-     "next_cursor is null on the last page.", "GET", "/briefings/facts?cursor={hobby_cursor}&limit=2", None, None),
-    ("face_name_only", "Face path with the owner's mode set to name: no facts or last interaction.",
-     "GET", f"/briefings/people/{SAM}", None, "name"),
-    ("face_nothing", "Face path with the owner's mode set to nothing: no name either.",
-     "GET", f"/briefings/people/{SAM}", None, "nothing"),
-    ("face_unnamed", "Face path for a face-created person nobody has named: display_name is null.",
-     "GET", f"/briefings/people/{UNNAMED}", None, None),
-    ("face_no_memories", "Face path for a named person with no facts or conversations: empty pages.",
-     "GET", f"/briefings/people/{PRIYA}", None, None),
-    ("by_name_found", "Name path, one match: full brief including visual_descriptors, regardless of mode.",
-     "GET", "/briefings/by-name?name=Sam&max_facts=2", None, None),
-    ("by_name_ambiguous", "Name path, several matches: candidates with hints capped at max_facts per category.",
-     "GET", "/briefings/by-name?name=Alex", None, None),
-    ("by_name_not_found", "Name path, no match. Unnamed people never match a name.",
-     "GET", "/briefings/by-name?name=Zara", None, None),
-    ("display_mode_get", "The owner's glasses display mode. Defaults to name_and_facts.",
-     "GET", "/briefings/display-mode", None, None),
-    ("display_mode_put", "Set the owner's glasses display mode: nothing, name, or name_and_facts.",
-     "PUT", "/briefings/display-mode", {"display_mode": "name"}, None),
+    ("brief", "A known person, e.g. from face recognition: the first page of every category. "
+     "The client decides what to display.", f"/people/{SAM}/briefing?max_facts=2", True),
+    ("facts_next_page", "Continue Sam's hobbies from brief's hobbies.next_cursor. "
+     "next_cursor is null on the last page.", f"/people/{SAM}/facts?category=hobby&cursor={{hobby_cursor}}&limit=2", True),
+    ("facts_first_page", "A category's first page, without a cursor, e.g. for a person detail screen.",
+     f"/people/{SAM}/facts?category=visual_descriptor&limit=1", True),
+    ("brief_unnamed", "A face-created person nobody has named: display_name is null.",
+     f"/people/{UNNAMED}/briefing", True),
+    ("brief_no_memories", "A named person with no facts or conversations: empty pages.",
+     f"/people/{PRIYA}/briefing", True),
+    ("by_name_found", "Name lookup, one match: the same brief as /people/{id}/briefing.",
+     "/people/briefing?name=Sam&max_facts=2", True),
+    ("by_name_ambiguous", "Name lookup, several matches: candidates with hints capped at max_facts per "
+     "category. After the wearer picks, call /people/{id}/briefing.", "/people/briefing?name=Alex", True),
+    ("by_name_not_found", "Name lookup, no match. Unnamed people never match a name.",
+     "/people/briefing?name=Zara", True),
     ("error_unauthorized", "Missing, unknown, or revoked bearer token (any route).",
-     "GET", f"/briefings/people/{SAM}", None, "no-token"),
+     f"/people/{SAM}/briefing", False),
     ("error_person_not_found", "Unknown person ID, or one belonging to another owner.",
-     "GET", f"/briefings/people/{fixed(0xDEAD)}", None, None),
-    ("error_invalid_cursor", "Malformed cursor, or one from an older fact ordering.",
-     "GET", "/briefings/facts?cursor=bm90LWEtY3Vyc29y", None, None),
+     f"/people/{fixed(0xDEAD)}/briefing", True),
+    ("error_invalid_cursor", "Malformed cursor, one from an older fact ordering, or one issued for a "
+     "different person or category.", f"/people/{SAM}/facts?category=hobby&cursor=bm90LWEtY3Vyc29y", True),
 ]
 
 
 def test_contract_fixtures_match_live_responses(api, scenario):
     update = os.environ.get("UPDATE_CONTRACT_FIXTURES") == "1"
     values, stale = {}, []
-    for name, description, method, path, body, mode in CASES:
-        if mode not in (None, "no-token"):
-            api("PUT", "/briefings/display-mode", json={"display_mode": mode})
+    for name, description, path, authorized in CASES:
         path = path.format(**{k: quote(v) for k, v in values.items()})
-        response = api(method, path, json=body, token=None if mode == "no-token" else ...)
-        if mode not in (None, "no-token"):
-            api("PUT", "/briefings/display-mode", json={"display_mode": "name_and_facts"})
-        if name == "face_name_and_facts":
+        response = api("GET", path, token=... if authorized else None)
+        if name == "brief":
             values["hobby_cursor"] = response.json()["hobbies"]["next_cursor"]
-        request = {"method": method, "path": path}
-        if mode != "no-token":
+        request = {"method": "GET", "path": path}
+        if authorized:
             request["headers"] = {"Authorization": "Bearer <token>"}
-        if body is not None:
-            request["body"] = body
         fixture = {"description": description, "request": request,
                    "response": {"status": response.status_code, "body": response.json()}}
         target = CONTRACTS / f"{name}.json"

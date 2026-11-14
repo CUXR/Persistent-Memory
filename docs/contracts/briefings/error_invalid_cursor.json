@@ -1,8 +1,8 @@
 {
-  "description": "Malformed cursor, or one from an older fact ordering.",
+  "description": "Malformed cursor, one from an older fact ordering, or one issued for a different person or category.",
   "request": {
     "method": "GET",
-    "path": "/briefings/facts?cursor=bm90LWEtY3Vyc29y",
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/facts?category=hobby&cursor=bm90LWEtY3Vyc29y",
     "headers": {
       "Authorization": "Bearer <token>"
     }

@@ -1,8 +1,8 @@
 {
-  "description": "Name path, no match. Unnamed people never match a name.",
+  "description": "Name lookup, no match. Unnamed people never match a name.",
   "request": {
     "method": "GET",
-    "path": "/briefings/by-name?name=Zara",
+    "path": "/people/briefing?name=Zara",
     "headers": {
       "Authorization": "Bearer <token>"
     }

@@ -1,8 +1,8 @@
 {
-  "description": "Face path for a face-created person nobody has named: display_name is null.",
+  "description": "A face-created person nobody has named: display_name is null.",
   "request": {
     "method": "GET",
-    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a2",
+    "path": "/people/00000000-0000-4000-8000-0000000000a2/briefing",
     "headers": {
       "Authorization": "Bearer <token>"
     }
@@ -11,7 +11,6 @@
     "status": 200,
     "body": {
       "person_id": "00000000-0000-4000-8000-0000000000a2",
-      "display_mode": "name_and_facts",
       "display_name": null,
       "is_unnamed": true,
       "hobbies": {
@@ -22,7 +21,10 @@
         "items": [],
         "next_cursor": null
       },
-      "visual_descriptors": null,
+      "visual_descriptors": {
+        "items": [],
+        "next_cursor": null
+      },
       "last_interaction": null
     }
   }

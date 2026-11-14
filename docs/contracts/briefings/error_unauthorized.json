@@ -2,7 +2,7 @@
   "description": "Missing, unknown, or revoked bearer token (any route).",
   "request": {
     "method": "GET",
-    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a1"
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/briefing"
   },
   "response": {
     "status": 401,

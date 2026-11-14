@@ -1,8 +1,8 @@
 {
-  "description": "Name path, one match: full brief including visual_descriptors, regardless of mode.",
+  "description": "Name lookup, one match: the same brief as /people/{id}/briefing.",
   "request": {
     "method": "GET",
-    "path": "/briefings/by-name?name=Sam&max_facts=2",
+    "path": "/people/briefing?name=Sam&max_facts=2",
     "headers": {
       "Authorization": "Bearer <token>"
     }
@@ -13,7 +13,6 @@
       "status": "found",
       "brief": {
         "person_id": "00000000-0000-4000-8000-0000000000a1",
-        "display_mode": "name_and_facts",
         "display_name": "Sam Lee",
         "is_unnamed": false,
         "hobbies": {

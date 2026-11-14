@@ -2,7 +2,7 @@
   "description": "Unknown person ID, or one belonging to another owner.",
   "request": {
     "method": "GET",
-    "path": "/briefings/people/00000000-0000-4000-8000-00000000dead",
+    "path": "/people/00000000-0000-4000-8000-00000000dead/briefing",
     "headers": {
       "Authorization": "Bearer <token>"
     }

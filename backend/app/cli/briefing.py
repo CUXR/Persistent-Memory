@@ -1,8 +1,8 @@
-"""Print a person briefing by person ID (face path) or by name (name path)."""
+"""Print a person briefing by person ID or by name, or a page of a person's facts."""
 import argparse
 from uuid import UUID
 
-DISPLAY_MODES = ("nothing", "name", "name_and_facts")
+CATEGORIES = ("hobby", "affiliation", "visual_descriptor")
 
 
 def main():
@@ -11,13 +11,13 @@ def main():
     parser.add_argument("--max-facts", type=int, default=5, help="Facts per category (page size)")
     sub = parser.add_subparsers(dest="command", required=True)
     brief = sub.add_parser("brief")
-    brief.add_argument("person_id", type=UUID, help="Person ID supplied by the face tracker")
-    brief.add_argument("--mode", choices=DISPLAY_MODES,
-                       help="Display mode; defaults to the owner's stored setting")
+    brief.add_argument("person_id", type=UUID, help="Person ID, e.g. from the face tracker")
     by_name = sub.add_parser("by-name")
     by_name.add_argument("name")
-    more = sub.add_parser("more", help="Next page of facts from a next_cursor")
-    more.add_argument("cursor")
+    facts = sub.add_parser("facts", help="One page of a person's facts in one category")
+    facts.add_argument("person_id", type=UUID)
+    facts.add_argument("category", choices=CATEGORIES)
+    facts.add_argument("--cursor", help="A next_cursor from the previous page")
     args = parser.parse_args()
     if args.max_facts < 0:
         parser.error("--max-facts must be non-negative")
@@ -32,9 +32,10 @@ def main():
         service = BriefingService(store)
         try:
             if args.command == "brief":
-                result = service.brief(args.person_id, max_facts=args.max_facts, display_mode=args.mode)
-            elif args.command == "more":
-                result = service.more_facts(args.cursor, limit=args.max_facts)
+                result = service.brief(args.person_id, max_facts=args.max_facts)
+            elif args.command == "facts":
+                result = service.facts(args.person_id, args.category, cursor=args.cursor,
+                                       limit=args.max_facts)
             else:
                 result = service.brief_by_name(args.name, max_facts=args.max_facts)
         except (PersonNotFoundError, InvalidCursorError, ValueError) as exc:

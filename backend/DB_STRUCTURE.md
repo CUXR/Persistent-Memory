@@ -94,6 +94,3 @@ API: owner, a label for the client that holds the token, the token's SHA-256
 (unique; the raw token is never stored), and an optional revocation time. The
 owner for each request comes from this table, not from the client. Issue,
 list, and revoke tokens with `python -m app.cli.tokens`.
-
-The glasses display mode (`nothing`, `name`, or `name_and_facts`) is stored per
-owner as `users.preferences["glasses_display_mode"]`. It needs no column.

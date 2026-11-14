@@ -1,8 +1,8 @@
 {
-  "description": "Face path, mode name_and_facts: first page per category. No visual_descriptors on the face path.",
+  "description": "A known person, e.g. from face recognition: the first page of every category. The client decides what to display.",
   "request": {
     "method": "GET",
-    "path": "/briefings/people/00000000-0000-4000-8000-0000000000a1?max_facts=2",
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/briefing?max_facts=2",
     "headers": {
       "Authorization": "Bearer <token>"
     }
@@ -11,7 +11,6 @@
     "status": 200,
     "body": {
       "person_id": "00000000-0000-4000-8000-0000000000a1",
-      "display_mode": "name_and_facts",
       "display_name": "Sam Lee",
       "is_unnamed": false,
       "hobbies": {
@@ -36,7 +35,19 @@
         ],
         "next_cursor": null
       },
-      "visual_descriptors": null,
+      "visual_descriptors": {
+        "items": [
+          {
+            "id": "00000000-0000-4000-8000-000000000f31",
+            "text": "Red rain jacket"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000f30",
+            "text": "Curly dark hair"
+          }
+        ],
+        "next_cursor": null
+      },
       "last_interaction": {
         "date": "2026-01-05T15:30:00Z",
         "summary": "Sam described a climbing trip to the Gunks."

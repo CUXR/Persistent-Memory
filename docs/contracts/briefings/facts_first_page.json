@@ -1,0 +1,24 @@
+{
+  "description": "A category's first page, without a cursor, e.g. for a person detail screen.",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/facts?category=visual_descriptor&limit=1",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000f31",
+          "text": "Red rain jacket"
+        }
+      ],
+      "next_cursor": "eyJ2IjoxLCJwIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGExIiwiYyI6InZpc3VhbF9kZXNjcmlwdG9yIiwidCI6IjIwMjYtMDEtMDFUMDA6MDE6MDAiLCJpIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwZjMxIn0",
+      "person_id": "00000000-0000-4000-8000-0000000000a1",
+      "category": "visual_descriptor"
+    }
+  }
+}
