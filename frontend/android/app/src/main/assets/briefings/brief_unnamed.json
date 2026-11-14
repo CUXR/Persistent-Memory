@@ -1,0 +1,31 @@
+{
+  "description": "A face-created person nobody has named: display_name is null.",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-0000000000a2/briefing",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "person_id": "00000000-0000-4000-8000-0000000000a2",
+      "display_name": null,
+      "is_unnamed": true,
+      "hobbies": {
+        "items": [],
+        "next_cursor": null
+      },
+      "affiliations": {
+        "items": [],
+        "next_cursor": null
+      },
+      "visual_descriptors": {
+        "items": [],
+        "next_cursor": null
+      },
+      "last_interaction": null
+    }
+  }
+}

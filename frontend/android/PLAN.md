@@ -108,3 +108,9 @@ The current checkout's FastAPI app mounts an empty `/users` router. There is no 
 5. Replace fixtures only after #34/#35 and the authenticated recognition/briefing contracts are available. Preserve owner isolation and persisted person UUIDs; add audio boundaries before microphone integration.
 
 This is a proposed next slice, not an implemented API or a production authentication design.
+
+## Fixture HUD and microphone diagnostic (2026-11-14)
+
+- The briefing page uses PR #52 fixtures for locally persisted hidden, name, and name + facts modes. Emulator checks cover identity changes and fact pagination.
+- The microphone page records a bounded app-private WAV for hardware qualification. Device audio intake and the upload format are tracked in #49 and #50.
+- Next hardware checks: wearer input and readability, microphone quality and permissions, and direct Wi-Fi. Follow the scope amendment in #39 for backend integration.

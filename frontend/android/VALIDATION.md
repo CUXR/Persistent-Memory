@@ -54,3 +54,9 @@ Keep a filtered logcat running before exercising camera sessions; vendor logs ca
 - Physical temple gestures, optical fusion/readability, removal/wear behavior.
 - Deliberate camera contention/disconnection.
 - Raw YUV delivery, measured display latency, and discharge-only battery measurements remain outstanding.
+
+## Android emulator checks (2026-11-14)
+
+- Matching briefing text in both panes, all three modes, mode persistence after force-stop, fact wrapping, and a fact from the continuation fixture. Switching fixtures reset pagination and cleared the previous person's facts.
+- Microphone permission denial displayed recovery guidance in both panes. After granting permission, tap-to-stop, leaving the page, and pressing Home each produced a distinct, decodable 16 kHz mono PCM16 WAV.
+- Debug build and lint passed. RayNeo optics, temple inputs, microphone, and standalone Wi-Fi still need hardware validation.

@@ -5,16 +5,33 @@
     <string name="camera_controls">Tap: capture · Hold: preview · Swipe: browse</string>
     <string name="preview_controls">Tap: capture · Hold: hide preview · Double-tap: exit</string>
     <string name="page_number">%1$d / %2$d</string>
+    <string name="briefing_hidden">Hidden</string>
+    <string name="briefing_name">Name</string>
+    <string name="briefing_name_facts">Name + facts</string>
+    <string name="briefing_unnamed">Unnamed person</string>
+    <string name="briefing_no_facts">No facts yet.</string>
+    <string name="briefing_controls">Hold: display (%1$s) · Swipe: browse</string>
+    <string name="briefing_fact_controls">Tap: next fact · Hold: display (%1$s)</string>
+    <string name="microphone_ready">Tap to record a local audio sample.</string>
+    <string name="microphone_denied">Microphone denied. Tap to retry.\nEnable in Settings if blocked.</string>
+    <string name="microphone_starting">Starting microphone…</string>
+    <string name="microphone_recording">Recording · up to 60 seconds</string>
+    <string name="microphone_stopping">Saving recording…</string>
+    <string name="microphone_saved">Saved local audio sample.</string>
+    <string name="microphone_failed">Microphone unavailable. Tap to retry.</string>
+    <string name="microphone_controls">Tap: start/stop · Swipe: browse</string>
     <string-array name="hud_titles">
         <item>Ready</item>
-        <item>Sample memory</item>
+        <item>Briefing</item>
         <item>Display check</item>
         <item>Local camera</item>
+        <item>Local microphone</item>
     </string-array>
     <string-array name="hud_messages">
         <item>Text is running locally\non your glasses.</item>
-        <item>Alex studies robotics.\nAsk about their latest project.</item>
+        <item></item>
         <item>You should see one clear\nblock of text with both eyes open.</item>
         <item>Tap to allow camera access.</item>
+        <item></item>
     </string-array>
 </resources>

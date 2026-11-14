@@ -1,6 +1,6 @@
 # Memory glasses
 
-Standalone RayNeo X3 Pro text HUD and local Camera2 capture. Four pages; swipe to browse, tap to advance or capture on the camera page, double-tap to exit. CAMERA is requested on demand. No network access.
+Standalone RayNeo X3 Pro HUD with fixture briefings, local Camera2 capture, and a microphone diagnostic. Swipe to browse five pages and double-tap to exit. Camera and microphone permissions are requested on demand. No network access.
 
 ## Build
 
@@ -32,6 +32,20 @@ Compile and target SDK are 36; minimum API is 32, supporting the glasses' Androi
 - Double-tap exits to the launcher.
 - Returning after pausing preserves the page without replaying the last gesture. Double-tap finishes the activity; a fresh launch starts on page one.
 - Check `adb logcat -s MemoryHud AndroidRuntime` for page renders or crashes.
+
+## Fixture briefings
+
+Swipe once from Ready. Hold to cycle Name + facts → Hidden → Name. The mode survives relaunch. Tap to advance one fact, including facts from the bundled continuation page. In Hidden mode, hold again to restore text or swipe to leave the page.
+
+For ADB or keyboard checks, M cycles modes and F switches between the named, no-facts, and unnamed fixtures. The bundled responses come from [PR #52](https://github.com/CUXR/Persistent-Memory/pull/52). The HUD displays hobbies and affiliations and omits visual descriptors.
+
+## Local microphone
+
+Swipe to page 5 and tap to request permission. Tap again to record and tap to stop. Leaving the page or app also stops recording. The diagnostic records for up to 60 seconds and keeps the latest successful sample as app-private 16 kHz mono PCM16 WAV.
+
+```sh
+adb exec-out run-as org.cuxr.memory cat files/microphone.wav > /tmp/memory-microphone.wav
+```
 
 ## Local camera
 

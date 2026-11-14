@@ -6,7 +6,7 @@ class TempleInputAdapter(
     private val next: (Int) -> Unit,
     private val tap: () -> Unit,
     private val exit: () -> Unit,
-    private val togglePreview: () -> Unit,
+    private val hold: () -> Unit,
 ) {
     fun accept(action: TempleAction) {
         if (action.consumed) return
@@ -17,7 +17,7 @@ class TempleInputAdapter(
             is TempleAction.SlideForward, is TempleAction.SlideDownwards -> next(1)
             is TempleAction.SlideBackward, is TempleAction.SlideUpwards -> next(-1)
             is TempleAction.DoubleClick -> exit()
-            is TempleAction.LongClick -> togglePreview()
+            is TempleAction.LongClick -> hold()
             else -> Unit
         }
     }
