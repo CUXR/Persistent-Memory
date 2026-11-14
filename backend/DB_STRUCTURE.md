@@ -86,11 +86,3 @@ Older recordings do not move `last_seen_at` backwards.
 `person_aliases` and `person_prefs` remain legacy tables; name resolution and the
 audio ingestion path do not use them. This migration preserves existing data
 rather than dropping unrelated tables.
-
-## API tokens
-
-`api_tokens` (revision `0004_api_tokens`) holds bearer credentials for the HTTP
-API: owner, a label for the client that holds the token, the token's SHA-256
-(unique; the raw token is never stored), and an optional revocation time. The
-owner for each request comes from this table, not from the client. Issue,
-list, and revoke tokens with `python -m app.cli.tokens`.

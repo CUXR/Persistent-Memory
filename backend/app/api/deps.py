@@ -1,17 +1,14 @@
 from collections.abc import Generator
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core import database
 from app.core.database import get_db
-from app.crud.api_tokens import owner_for_token
 from app.crud.memory_store import MemoryStore
+from app.models.user import User
 from app.services.briefing import BriefingService
-
-_bearer = HTTPBearer(auto_error=False)
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -26,23 +23,26 @@ def get_session_factory() -> sessionmaker[Session]:
 
 
 def get_current_owner(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    x_owner_id: str | None = Header(None, alias="X-Owner-Id"),
     session_factory: sessionmaker[Session] = Depends(get_session_factory),
 ) -> UUID:
-    """Derive the owner from a bearer token. This is the one owner-scoping seam.
+    """The requesting owner. Every owner-scoped route depends on this.
 
-    Clients never send an owner ID; every owner-scoped route depends on this.
+    Development stand-in (#35): the client names its owner in the X-Owner-Id
+    header, which is not authentication. Real user accounts replace this
+    function, and routes stay unchanged.
     """
-    owner_id = None
-    if credentials is not None and credentials.scheme.lower() == "bearer":
+    try:
+        owner_id = UUID(x_owner_id) if x_owner_id else None
+    except ValueError:
+        owner_id = None
+    if owner_id is not None:
         with session_factory() as session:
-            owner_id = owner_for_token(session, credentials.credentials)
+            if session.get(User, owner_id) is None:
+                owner_id = None
     if owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="X-Owner-Id must name an existing user")
     return owner_id
 
 

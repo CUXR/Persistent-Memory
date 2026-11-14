@@ -4,7 +4,7 @@
     "method": "GET",
     "path": "/people/briefing?name=Alex",
     "headers": {
-      "Authorization": "Bearer <token>"
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
     }
   },
   "response": {

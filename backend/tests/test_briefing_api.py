@@ -1,4 +1,4 @@
-"""HTTP briefings: bearer auth, owner isolation, pagination, contract fixtures.
+"""HTTP briefings: owner scoping, owner isolation, pagination, contract fixtures.
 
 Contract fixtures in docs/contracts/briefings/ are checked against live responses.
 After an intended contract change, regenerate them with:
@@ -10,8 +10,6 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -19,7 +17,6 @@ import httpx
 import pytest
 
 from app.api.deps import get_session_factory
-from app.crud.api_tokens import issue_token, owner_for_token, revoke_token
 from app.crud.memory_store import MemoryStore
 from app.main import app
 from app.models.episode import Episode
@@ -44,14 +41,14 @@ SAM, UNNAMED, ALEX_S, ALEX_J, PRIYA = (fixed(n) for n in (0xA1, 0xA2, 0xA3, 0xA4
 class Api:
     """Synchronous wrapper over httpx's ASGI transport (no live server)."""
 
-    def __init__(self, token=None):
-        self.token = token
+    def __init__(self, owner_id=None):
+        self.owner_id = owner_id
 
-    def __call__(self, method, path, *, token=..., **kwargs):
-        token = self.token if token is ... else token
+    def __call__(self, method, path, *, owner=..., **kwargs):
+        owner = self.owner_id if owner is ... else owner
         headers = kwargs.pop("headers", {})
-        if token is not None:
-            headers["Authorization"] = f"Bearer {token}"
+        if owner is not None:
+            headers["X-Owner-Id"] = str(owner)
 
         async def send():
             transport = httpx.ASGITransport(app=app)
@@ -84,11 +81,6 @@ def add_facts(store, person_id, category, texts, *, id_base=None):
                                    fact_category=category, created_at=T0 + timedelta(minutes=i)))
 
 
-def token_for(store, owner_id, label="test client"):
-    with store.Session.begin() as session:
-        return issue_token(session, owner_id, label)[1]
-
-
 @pytest.fixture
 def store(tmp_path):
     # A file database: the app serves sync routes from a worker thread.
@@ -103,7 +95,7 @@ def store(tmp_path):
 
 @pytest.fixture
 def api(store):
-    return Api(token_for(store, OWNER))
+    return Api(OWNER)
 
 
 @pytest.fixture
@@ -128,7 +120,7 @@ def scenario(store):
     add_person(store, PRIYA, "Priya", "Sharma", owner_id=OWNER)
 
 
-# ── Authentication ───────────────────────────────────────────
+# ── Owner scoping ────────────────────────────────────────────
 
 ROUTES = [
     f"/people/{SAM}/briefing",
@@ -138,65 +130,11 @@ ROUTES = [
 
 
 @pytest.mark.parametrize("path", ROUTES)
-def test_every_route_requires_a_bearer_token(store, scenario, path):
-    response = Api()("GET", path)
+@pytest.mark.parametrize("owner", [None, "", "not-a-uuid", uuid4()])
+def test_every_route_needs_an_existing_owner(store, scenario, path, owner):
+    response = Api(owner)("GET", path)
     assert response.status_code == 401
-    assert response.headers["www-authenticate"] == "Bearer"
-
-
-@pytest.mark.parametrize("path", ROUTES)
-def test_unknown_token_is_rejected(store, scenario, path):
-    assert Api("pm_not-a-real-token")("GET", path).status_code == 401
-
-
-def test_non_bearer_scheme_is_rejected(store, scenario, api):
-    response = api("GET", f"/people/{SAM}/briefing", token=None,
-                   headers={"Authorization": f"Basic {api.token}"})
-    assert response.status_code == 401
-
-
-def test_revoked_token_is_rejected(store, scenario):
-    with store.Session.begin() as session:
-        token, raw = issue_token(session, OWNER, "lost phone")
-    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 200
-    with store.Session.begin() as session:
-        assert revoke_token(session, token.id)
-    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 401
-
-
-def test_only_the_token_hash_is_stored(store):
-    with store.Session.begin() as session:
-        token, raw = issue_token(session, OWNER, "glasses")
-    assert raw.startswith("pm_") and raw not in token.token_hash
-    with store.Session() as session:
-        assert owner_for_token(session, raw) == OWNER
-
-
-def test_tokens_require_an_existing_user(store):
-    with store.Session.begin() as session, pytest.raises(ValueError):
-        issue_token(session, uuid4(), "glasses")
-
-
-def test_token_cli_issues_lists_and_revokes(store, scenario):
-    env = {**os.environ, "DATABASE_URL": str(store._db_url)}
-
-    def cli(*args):
-        result = subprocess.run([sys.executable, "-m", "app.cli.tokens", *args], cwd=ROOT,
-                                env=env, capture_output=True, text=True)
-        return result.returncode, result.stdout + result.stderr
-
-    code, out = cli("create", "--owner-id", str(OWNER), "--label", "RayNeo glasses")
-    assert code == 0, out
-    fields = dict(line.split(":", 1) for line in out.strip().splitlines())
-    token_id, raw = fields["token_id"].strip(), fields["token"].strip()
-    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 200
-    code, out = cli("list", "--owner-id", str(OWNER))
-    assert token_id in out and "active" in out and "RayNeo glasses" in out
-    assert cli("revoke", token_id)[0] == 0
-    assert "revoked" in cli("list", "--owner-id", str(OWNER))[1]
-    assert Api(raw)("GET", f"/people/{SAM}/briefing").status_code == 401
-    assert cli("revoke", str(uuid4()))[0] != 0
-    assert cli("create", "--owner-id", str(uuid4()), "--label", "x")[0] != 0
+    assert response.json() == {"detail": "X-Owner-Id must name an existing user"}
 
 
 # ── Routing ──────────────────────────────────────────────────
@@ -223,7 +161,7 @@ def other(store, scenario):
     add_user(store, other_owner)
     add_person(store, their_sam, "Sam", "Lee", owner_id=other_owner)
     add_facts(store, their_sam, "hobby", ["Theirs 1", "Theirs 2", "Theirs 3"])
-    return Api(token_for(store, other_owner)), their_sam
+    return Api(other_owner), their_sam
 
 
 def test_briefs_hide_other_owners_people(api, other):
@@ -299,8 +237,7 @@ def test_blank_name_is_rejected(api, scenario):
 
 # ── Contract fixtures ────────────────────────────────────────
 
-# Each case: fixture name, description, method, path, and whether to send the
-# token. Cursors are filled in from earlier responses.
+# Each case: fixture name, description, path, and whether to send X-Owner-Id. Cursors are filled in from earlier responses.
 CASES = [
     ("brief", "A known person, e.g. from face recognition: the first page of every category. "
      "The client decides what to display.", f"/people/{SAM}/briefing?max_facts=2", True),
@@ -318,7 +255,7 @@ CASES = [
      "category. After the wearer picks, call /people/{id}/briefing.", "/people/briefing?name=Alex", True),
     ("by_name_not_found", "Name lookup, no match. Unnamed people never match a name.",
      "/people/briefing?name=Zara", True),
-    ("error_unauthorized", "Missing, unknown, or revoked bearer token (any route).",
+    ("error_unknown_owner", "Missing or malformed X-Owner-Id, or one that names no user (any route).",
      f"/people/{SAM}/briefing", False),
     ("error_person_not_found", "Unknown person ID, or one belonging to another owner.",
      f"/people/{fixed(0xDEAD)}/briefing", True),
@@ -330,14 +267,14 @@ CASES = [
 def test_contract_fixtures_match_live_responses(api, scenario):
     update = os.environ.get("UPDATE_CONTRACT_FIXTURES") == "1"
     values, stale = {}, []
-    for name, description, path, authorized in CASES:
+    for name, description, path, with_owner in CASES:
         path = path.format(**{k: quote(v) for k, v in values.items()})
-        response = api("GET", path, token=... if authorized else None)
+        response = api("GET", path, owner=... if with_owner else None)
         if name == "brief":
             values["hobby_cursor"] = response.json()["hobbies"]["next_cursor"]
         request = {"method": "GET", "path": path}
-        if authorized:
-            request["headers"] = {"Authorization": "Bearer <token>"}
+        if with_owner:
+            request["headers"] = {"X-Owner-Id": str(OWNER)}
         fixture = {"description": description, "request": request,
                    "response": {"status": response.status_code, "body": response.json()}}
         target = CONTRACTS / f"{name}.json"

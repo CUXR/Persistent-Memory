@@ -6,22 +6,15 @@ it. `backend/tests/test_briefing_api.py` replays every fixture against the app,
 so they stay accurate. Build client models and offline fixtures from them. The
 full schema is also served at `/openapi.json`.
 
-## Authentication
+## Owner scoping
 
-Every route needs `Authorization: Bearer <token>`. The server finds the owner
-from the token. Clients never send an owner ID. A missing, unknown, or revoked
-token returns `401` with `WWW-Authenticate: Bearer`.
+Every route needs an `X-Owner-Id` header naming the user whose memories to
+read. Each user only sees their own people. A missing or malformed header, or
+one that names no user, returns `401`.
 
-Issue one token per client and revoke it if the device is lost:
-
-```sh
-python -m app.cli.tokens create --owner-id USER_UUID --label "RayNeo glasses"
-python -m app.cli.tokens list --owner-id USER_UUID
-python -m app.cli.tokens revoke TOKEN_ID
-```
-
-The token is printed once. Only its SHA-256 is stored. These tokens are a stand-in
-until a proper auth system replaces them.
+This header is a development stand-in shared with the read APIs (#35), not
+authentication. When real user accounts arrive, the server will identify the
+user from their login instead, and the routes and responses stay the same.
 
 ## Routes
 
@@ -72,7 +65,7 @@ de-duplicate retries.
 
 | Status | When | Fixture |
 | --- | --- | --- |
-| 401 | Missing, unknown, or revoked token | `error_unauthorized.json` |
+| 401 | Missing or malformed `X-Owner-Id`, or no such user | `error_unknown_owner.json` |
 | 404 | Unknown person ID, or another owner's person (same response for both) | `error_person_not_found.json` |
 | 400 | Malformed or outdated cursor, or one from a different person or category | `error_invalid_cursor.json` |
 | 422 | Page size out of range, unknown category, blank name | FastAPI validation body |

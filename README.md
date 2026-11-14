@@ -7,7 +7,7 @@ so the wearer can look them up later.
 ## Status
 
 The pieces exist and are tested individually, but there is **no end-to-end
-runnable pipeline yet**. The HTTP API has one feature so far: token-authenticated
+runnable pipeline yet**. The HTTP API has one feature so far: owner-scoped
 person briefings, which show what to remember about someone by face or by name
 ([contract](docs/contracts/briefings/README.md)). Missing: live microphone
 capture and a background worker, camera and audio upload endpoints, conversation
@@ -32,7 +32,7 @@ mic ─→ VAD capture ─→ WAV ─→ diarization ─→ voice matching ─�
 | Recording-to-memory coordinator, retries, voice enrollment | `backend/app/services/audio_memory.py`, `voice_enrollment.py` |
 | LLM extraction and the transactional memory write | `backend/app/services/conversation_ingestion.py`, `llm_client.py`, `crud/conversations.py` |
 | Person briefings: name, top facts, and last conversation, paged and owner-scoped | `backend/app/services/briefing.py`, `api/routes/briefing.py`, [contract](docs/contracts/briefings/README.md) |
-| HTTP auth: bearer tokens mapped to an owner | `backend/app/api/deps.py`, `python -m app.cli.tokens --help` |
+| Owner scoping: `X-Owner-Id` header until real user accounts exist | `backend/app/api/deps.py` |
 | Schema and migrations | `backend/app/models/`, `backend/alembic/`, [DB_STRUCTURE.md](backend/DB_STRUCTURE.md) |
 | CLI for processing a recorded file | `python -m app.cli.audio --help` |
 
@@ -60,12 +60,11 @@ Optional components:
   (needs a C++ compiler for insightface).
 - **LLM extraction:** set `OPENAI_API_KEY`.
 
-Run the API and call it with a token:
+Run the API and call it as a user:
 
 ```sh
 uvicorn app.main:app --reload
-python -m app.cli.tokens create --owner-id USER_UUID --label "my laptop"
-curl -H "Authorization: Bearer TOKEN" "localhost:8000/people/briefing?name=Sam"
+curl -H "X-Owner-Id: USER_UUID" "localhost:8000/people/briefing?name=Sam"
 ```
 
 Interactive docs are at `localhost:8000/docs`.

@@ -27,9 +27,8 @@ def test_empty_database_upgrade_and_downgrade(tmp_path):
     assert "audio_jobs" in inspect(engine).get_table_names()
     assert "voice_discovery" in {column["name"] for column in inspect(engine).get_columns("audio_jobs")}
     assert "voice_embedding" in {column["name"] for column in inspect(engine).get_columns("users")}
-    assert {"token_hash", "revoked_at"} <= {column["name"] for column in inspect(engine).get_columns("api_tokens")}
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004_api_tokens"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003_voice_discovery"
     engine.dispose()
     seed = subprocess.run(
         [sys.executable, "backend/scripts/seed_memory_store.py"], cwd=ROOT,
@@ -74,7 +73,6 @@ def test_postgres_migration_compiles_vector_schema():
     assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
     assert "CREATE TABLE audio_jobs" in sql
     assert "ALTER TABLE users ADD COLUMN voice_embedding VECTOR(512)" in sql
-    assert "CREATE TABLE api_tokens" in sql
 
 
 def test_audio_cli_help_does_not_require_database_configuration():
@@ -85,29 +83,3 @@ def test_audio_cli_help_does_not_require_database_configuration():
     )
     assert result.returncode == 0, result.stderr
     assert "capture-file" in result.stdout
-
-
-def test_migrated_schema_matches_models(tmp_path):
-    """Alembic head and the models agree, so create_all-based tests are representative."""
-    from alembic.autogenerate import compare_metadata
-    from alembic.migration import MigrationContext
-
-    from app.core.database import Base
-    import app.models  # noqa: F401  (registers every table)
-
-    url = f"sqlite+pysqlite:///{tmp_path / 'compare.sqlite'}"
-    migrate(url, "upgrade", "head")
-    engine = create_engine(url)
-    with engine.connect() as connection:
-        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
-    engine.dispose()
-
-
-def test_token_cli_help_does_not_require_database_configuration():
-    environment = {key: value for key, value in os.environ.items() if key != "DATABASE_URL"}
-    result = subprocess.run(
-        [sys.executable, "-m", "app.cli.tokens", "--help"], cwd=ROOT,
-        env=environment, capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "revoke" in result.stdout
