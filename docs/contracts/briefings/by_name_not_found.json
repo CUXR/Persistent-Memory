@@ -1,0 +1,17 @@
+{
+  "description": "Name lookup, no match. Unnamed people never match a name.",
+  "request": {
+    "method": "GET",
+    "path": "/people/briefing?name=Zara",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "status": "not_found",
+      "message": "There is no one in your memory named Zara."
+    }
+  }
+}

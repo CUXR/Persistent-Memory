@@ -1,0 +1,60 @@
+{
+  "description": "Name lookup, one match: the same brief as /people/{id}/briefing.",
+  "request": {
+    "method": "GET",
+    "path": "/people/briefing?name=Sam&max_facts=2",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "status": "found",
+      "brief": {
+        "person_id": "00000000-0000-4000-8000-0000000000a1",
+        "display_name": "Sam Lee",
+        "is_unnamed": false,
+        "hobbies": {
+          "items": [
+            {
+              "id": "00000000-0000-4000-8000-000000000f12",
+              "text": "Rock climbing"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000f11",
+              "text": "Trail running"
+            }
+          ],
+          "next_cursor": "eyJ2IjoxLCJwIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGExIiwiYyI6ImhvYmJ5IiwidCI6IjIwMjYtMDEtMDFUMDA6MDE6MDAiLCJpIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwZjExIn0"
+        },
+        "affiliations": {
+          "items": [
+            {
+              "id": "00000000-0000-4000-8000-000000000f20",
+              "text": "Works at Acme Robotics"
+            }
+          ],
+          "next_cursor": null
+        },
+        "visual_descriptors": {
+          "items": [
+            {
+              "id": "00000000-0000-4000-8000-000000000f31",
+              "text": "Red rain jacket"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000f30",
+              "text": "Curly dark hair"
+            }
+          ],
+          "next_cursor": null
+        },
+        "last_interaction": {
+          "date": "2026-01-05T15:30:00Z",
+          "summary": "Sam described a climbing trip to the Gunks."
+        }
+      }
+    }
+  }
+}

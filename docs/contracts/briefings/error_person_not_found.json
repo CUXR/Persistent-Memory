@@ -1,0 +1,16 @@
+{
+  "description": "Unknown person ID, or one belonging to another owner.",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-00000000dead/briefing",
+    "headers": {
+      "X-Owner-Id": "00000000-0000-4000-8000-000000000001"
+    }
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "detail": "Person not found"
+    }
+  }
+}
