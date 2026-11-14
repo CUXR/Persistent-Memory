@@ -11,6 +11,7 @@ class HudViewModel(private val savedState: SavedStateHandle) : ViewModel() {
     }
 
     companion object {
-        const val PAGE_COUNT = 3
+        const val CAMERA_PAGE = 3
+        const val PAGE_COUNT = 4
     }
 }

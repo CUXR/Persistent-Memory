@@ -1,6 +1,6 @@
 # Memory glasses
 
-Standalone RayNeo X3 Pro text HUD. Three local pages; tap or swipe to browse, double-tap to exit. No network or camera permissions in this milestone.
+Standalone RayNeo X3 Pro text HUD and local Camera2 capture. Four pages; swipe to browse, tap to advance or capture on the camera page, double-tap to exit. CAMERA is requested on demand. No network access.
 
 ## Build
 
@@ -33,4 +33,43 @@ Compile and target SDK are 36; minimum API is 32, supporting the glasses' Androi
 - Returning after pausing preserves the page without replaying the last gesture. Double-tap finishes the activity; a fresh launch starts on page one.
 - Check `adb logcat -s MemoryHud AndroidRuntime` for page renders or crashes.
 
-Camera capture, optional preview, and direct Wi-Fi verification remain in [PLAN.md](PLAN.md).
+## Local camera
+
+Browse to page 4, **Local camera**. Tap to request CAMERA permission; tap again after "Camera active" to capture. The camera runs only while this page is resumed. Leaving the page, sleeping, or exiting closes it. Screen sleep remains enabled.
+
+A single TextureView supplies the diagnostic preview. Hold on the camera page to show/hide it in both eyes; text-only capture remains the default. Mercury MirroringView redraws the source texture in the other eye, without a second camera output. Aspect-ratio fitting accounts for TextureView's built-in sensor rotation. Preview hides on pause or page exit. After its first completed frame, the first capture adds a JPEG ImageReader to the session; subsequent taps reuse that session. Camera selection uses rear-facing, backward-compatible characteristics and sensor area, rather than a fixed ID. Logs include advertised stream sizes, FPS, sensor orientation, and selected configuration. No unsupported FPS override is applied.
+
+JPEGs stay in app-private `files/captures/`; only the latest ten are retained. Rotation is stored using the sensor orientation for the glasses' fixed natural landscape display. Extract a named capture for Mac inspection:
+
+```sh
+adb shell run-as org.cuxr.memory ls files/captures
+adb exec-out run-as org.cuxr.memory cat files/captures/NAME.jpg > /tmp/memory-capture.jpg
+adb logcat -v threadtime MemoryCamera:I MemoryHud:I AndroidRuntime:E '*:S'
+```
+
+For USB keyboard/ADB diagnostics, left/right arrows browse, Enter/DPAD-center performs the tap action, and P toggles preview. This tests app behavior; physical temple input and optical fusion still require wearer checks. For example, from a fresh launch:
+
+```sh
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
+adb shell input keyevent 22
+adb shell input keyevent 22
+adb shell input keyevent 22
+adb shell input keyevent 66
+```
+
+On errors, swipe away and return to reopen. Permission denial shows a retry hint; persistent denial requires Android Settings. Each camera lifetime has a dedicated worker, bounded capture timeout, and at most one pending capture. Stale callbacks cannot repaint another page or resumed lifetime.
+
+See [VALIDATION.md](VALIDATION.md) for measured device results and remaining acceptance checks. Sustained preview and direct Wi-Fi work are tracked in [PLAN.md](PLAN.md).
+
+## Preview diagnostics
+
+With page 4 visible and preview enabled, run from this directory:
+
+```sh
+python3 tools/preview_soak.py --seconds 600
+```
+
+The standard-library-only tool records process continuity, preview sensor-result FPS/gaps, PSS, battery temperature/charge, thermal status, and Android rendering statistics into ignored `app/build/reports/preview-soak.json`. It temporarily enables USB keep-awake and restores the prior setting on exit. Keep the glasses connected and avoid capture/page changes during the run. Sensor-result FPS is not display latency; USB charging cannot establish battery drain. The app itself keeps normal sleep behavior.
+
+A proposed ADB-to-local-server POC is outlined in [PLAN.md](PLAN.md); no server transport is implemented yet.

@@ -79,3 +79,32 @@ Hardware acceptance requires an actual X3 Pro; emulator/build success alone is i
 - APK installed and launched on X3 Pro; device screenshot confirms matching left/right text. Relaunch succeeded without app crashes.
 - Wearer readability and physical gesture behavior need wearer confirmation. Ordinary ADB touchscreen injection does not emulate the SDK's right-temple input device.
 - Camera capture and preview remain the next milestone; direct scrcpy camera capture failed in the vendor camera HAL during stream configuration.
+
+## Camera milestone (2026-10-18)
+
+- Implemented permission flow, characteristic-based RGB selection, single-surface diagnostic preview, then JPEG session configuration on first capture.
+- Added camera page and single-dispatch TempleInputAdapter; both eyes receive the same status. Arrow/Enter controls support ADB diagnostics.
+- Camera lifetime owns worker, capture timeout, session/device/reader/surface cleanup; pause and page exit release camera resources. Removed permanently awake window flag.
+- Hardware delivers 1920x1080 preview and JPEG on camera 0. Mac extraction confirms real scene content and EXIF rotation. Ten home/resume/capture cycles succeeded; retention stays at ten JPEGs.
+- Build/lint pass. Detailed evidence and unverified permission/physical-input/contended-camera checks: [VALIDATION.md](VALIDATION.md).
+- Next: finish remaining wearer/permission checks; binocular preview is implemented below. Backend wiring remains gated by issue #39.
+
+## Binocular preview (2026-10-18)
+
+- Hold on Local camera to toggle live preview; tap captures. P provides the same toggle through ADB/keyboard.
+- One TextureView output feeds the left eye; Mercury MirroringView redraws that texture in the right eye. No second camera stream or app-level frame queue is added.
+- Fit the sensor-oriented texture within the body region. Status uses the existing small text token on black; text-only capture remains the default and returns on pause/page exit.
+- Device screenshots confirm matching upright scene content in both eyes; JPEG capture still succeeds while preview is visible. Long-run results are recorded in VALIDATION.md.
+- Raw YUV delivery, display latency measurement, standalone Wi-Fi, and backend integration remain separate work.
+
+## Proposed local-server POC after device checks
+
+The current checkout's FastAPI app mounts an empty `/users` router. There is no recognition/upload/briefing HTTP contract to consume yet.
+
+1. Add an explicitly development-only, loopback-bound receiver with a health route, bounded JPEG upload, and deterministic fixture briefing response. Propose routes under `/dev/device/`; agree schemas before wiring real recognition. Do not represent fixture identities as persisted people.
+2. Forward glasses loopback to the Mac with `adb reverse tcp:8000 tcp:8000`. A debug Kotlin client can then reach `http://127.0.0.1:8000`. Keep cleartext exceptions restricted to debug and loopback; production needs HTTPS and authenticated device provisioning.
+3. Start with manual captured-JPEG submission, one request in flight, a fixed upload limit (proposed 4 MiB), timeout/cancellation, session ID, sequence, capture timestamp, and explicit EXIF orientation semantics. Do not add continuous streaming until backpressure and the transport contract are proven.
+4. Render bounded fixture text plus connecting/received/offline/error states on the HUD. Verify actual upload decoding on the Mac, unplug/reconnect recovery, and stale-response cancellation on page/session changes.
+5. Replace fixtures only after #34/#35 and the authenticated recognition/briefing contracts are available. Preserve owner isolation and persisted person UUIDs; add audio boundaries before microphone integration.
+
+This is a proposed next slice, not an implemented API or a production authentication design.

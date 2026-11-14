@@ -22,3 +22,5 @@ The optical display uses black for unlit pixels; both ambient modes use the same
 Keep text left-aligned, short, and inside optical margins. One title, at most three body lines, one pagination label, and one gesture hint. Body line spacing is 1.25. Use immediate state changes; no decorative motion or shadows.
 
 Android resource colors and dimensions implement these tokens. This initial system applies to the Android HUD.
+
+The camera page preserves this hierarchy, replacing body copy with permission, active, capture, saved, or error status. Text-only capture is the default. Holding on the camera page enables a fitted live image inside the body region, with small status text on a black backing below it. A TextureView supplies one eye; Mercury MirroringView draws the same content in the other. Hiding preview or pausing restores the original body typography. Camera actions run once outside paired rendering.
