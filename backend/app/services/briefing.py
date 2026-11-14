@@ -10,7 +10,7 @@ from ..crud.briefing_queries import (
     FactCursor, InvalidCursorError, PersonNotFoundError, fact_page, get_owned_person, last_interaction,
 )
 from ..crud.memory_store import MemoryStore
-from ..crud.person_resolver import PersonResolver, is_unnamed
+from ..crud.person_resolver import PersonResolver, is_unnamed, person_name
 from ..schema.briefing import (
     Brief, BriefAmbiguous, BriefFound, BriefNotFound, BriefResult, FactCategory, FactPageResponse,
 )
@@ -43,7 +43,7 @@ class BriefingService:
             # Hints arrive unbounded and newest first; keep the top max_facts per category.
             candidates = [
                 c.model_copy(update={"hints": {
-                    category: texts[:max_facts] for category, texts in c.hints.items() if max_facts
+                    category: texts[:max_facts] for category, texts in c.hints.items()
                 }})
                 for c in resolved.candidates
             ]
@@ -77,9 +77,7 @@ class BriefingService:
         unnamed = is_unnamed(person)
         return Brief(
             person_id=person.id,
-            display_name=None if unnamed else (
-                person.display_name or f"{person.first_name} {person.last_name}".strip()
-            ),
+            display_name=None if unnamed else person_name(person),
             is_unnamed=unnamed,
             hobbies=fact_page(session, person.id, "hobby", max_facts),
             affiliations=fact_page(session, person.id, "affiliation", max_facts),
@@ -89,10 +87,8 @@ class BriefingService:
 
 
 def _check_page_size(size: int) -> None:
-    if size < 0:
-        raise ValueError("max_facts must be non-negative")
-    if size > MAX_PAGE_SIZE:
-        raise ValueError(f"max_facts must be at most {MAX_PAGE_SIZE}")
+    if not 1 <= size <= MAX_PAGE_SIZE:
+        raise ValueError(f"max_facts must be between 1 and {MAX_PAGE_SIZE}")
 
 
 __all__ = ["BriefingService", "DEFAULT_MAX_FACTS", "MAX_PAGE_SIZE", "PersonNotFoundError"]

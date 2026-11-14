@@ -19,8 +19,6 @@ def main():
     facts.add_argument("category", choices=CATEGORIES)
     facts.add_argument("--cursor", help="A next_cursor from the previous page")
     args = parser.parse_args()
-    if args.max_facts < 0:
-        parser.error("--max-facts must be non-negative")
     # Allow --help without database settings or application model initialization.
     from ..crud.briefing_queries import InvalidCursorError, PersonNotFoundError
     from ..crud.memory_store import MemoryStore

@@ -82,8 +82,6 @@ def fact_page(
     it, with the fact ID breaking ties so pages never skip or repeat. A new
     ranking changes the ordering and the cursor keys here, and CURSOR_VERSION.
     """
-    if limit <= 0:
-        return FactPage()
     query = select(PersonFact.id, PersonFact.fact_text, PersonFact.created_at).where(
         PersonFact.person_id == person_id, PersonFact.fact_category == category,
     )

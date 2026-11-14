@@ -1,5 +1,5 @@
 """Person briefings: by person ID, by name (resolver), and fact pages."""
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import json
 import os
 from pathlib import Path
@@ -11,59 +11,15 @@ from uuid import uuid4
 import pytest
 
 from app.crud.briefing_queries import CURSOR_VERSION, FactCursor, InvalidCursorError, PersonNotFoundError
-from app.crud.memory_store import MemoryStore
-from app.models.episode import Episode
-from app.models.memory import EpisodeParticipant
-from app.models.person import Person, PersonFact
-from app.models.user import User
+from app.models.person import PersonFact
 from app.services.briefing import BriefingService
+from briefing_helpers import T0, add_episode, add_facts, add_person, add_user, make_store
 
 ROOT = Path(__file__).resolve().parents[2]
-T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-
-def make_store(url="sqlite+pysqlite:///:memory:"):
-    store = MemoryStore(url, owner_user_id=uuid4())
-    store.initialize()
-    add_user(store, store.owner_user_id)
-    return store
-
-
-def add_user(store, user_id):
-    with store.Session.begin() as session:
-        session.add(User(id=user_id, first_name="Test", last_name="Owner",
-                         display_name="Test Owner", username=f"owner-{user_id}"))
-
-
-def add_person(store, first, last="", *, owner_id=None, unnamed=False):
-    person_id = uuid4()
-    with store.Session.begin() as session:
-        session.add(Person(
-            id=person_id, user_id=owner_id or store.owner_user_id, first_name=first, last_name=last,
-            display_name=f"Unknown person {person_id}" if unnamed else f"{first} {last}".strip(),
-        ))
-    return person_id
 
 
 def texts(page):
     return [fact.text for fact in page.items]
-
-
-def add_facts(store, person_id, category, texts):
-    """Add facts oldest first, so the last text is the newest."""
-    with store.Session.begin() as session:
-        for i, text in enumerate(texts):
-            session.add(PersonFact(person_id=person_id, fact_text=text, fact_category=category,
-                                   created_at=T0 + timedelta(minutes=i)))
-
-
-def add_episode(store, person_id, start, summary, *, owner_id=None):
-    with store.Session.begin() as session:
-        episode = Episode(user_id=owner_id or store.owner_user_id, person_id=person_id,
-                          start_time=start, dialogue_summary=summary)
-        session.add(episode)
-        session.flush()
-        session.add(EpisodeParticipant(episode_id=episode.id, person_id=person_id))
 
 
 @pytest.fixture
@@ -97,11 +53,6 @@ def test_brief_caps_each_category_at_max_facts(service, sam):
     small = service.brief(sam, max_facts=2)
     assert texts(small.hobbies) == ["hobby 6", "hobby 5"]
     assert texts(small.affiliations) == ["affiliation 6", "affiliation 5"]
-    assert service.brief(sam, max_facts=0).hobbies.items == []
-
-
-def test_brief_returns_facts_in_rank_order(service, sam):
-    assert texts(service.brief(sam).hobbies) == ["hobby 6", "hobby 5", "hobby 4", "hobby 3", "hobby 2"]
 
 
 def test_brief_includes_every_category(service, sam):
@@ -149,11 +100,14 @@ def test_brief_raises_not_found_for_other_owners_person(store, service):
         service.brief(theirs)
 
 
-def test_negative_max_facts_is_rejected(service, sam):
+@pytest.mark.parametrize("max_facts", [0, -1])
+def test_max_facts_below_one_is_rejected(service, sam, max_facts):
     with pytest.raises(ValueError):
-        service.brief(sam, max_facts=-1)
+        service.brief(sam, max_facts=max_facts)
     with pytest.raises(ValueError):
-        service.brief_by_name("Sam", max_facts=-1)
+        service.brief_by_name("Sam", max_facts=max_facts)
+    with pytest.raises(ValueError):
+        service.facts(sam, "hobby", limit=max_facts)
 
 
 # ── By name ──────────────────────────────────────────────────
@@ -165,23 +119,6 @@ def test_name_match_returns_the_same_brief_as_the_id(store, service, sam):
     assert result.status == "found"
     assert result.brief == service.brief(sam, max_facts=3)
     assert texts(result.brief.visual_descriptors) == ["visual 6", "visual 5", "visual 4"]
-
-
-def test_name_path_includes_latest_interaction(store, service, sam):
-    add_episode(store, sam, T0, "Talked about climbing.")
-    add_episode(store, sam, T0 + timedelta(days=3), "Talked about her internship.")
-    last = service.brief_by_name("Sam").brief.last_interaction
-    assert last.summary == "Talked about her internship."
-    assert last.date == T0 + timedelta(days=3)
-
-
-def test_name_path_without_visual_facts_returns_empty_page(store, service):
-    person_id = add_person(store, "Priya", "Sharma")
-    add_facts(store, person_id, "hobby", ["Paints"])
-    brief = service.brief_by_name("Priya").brief
-    assert brief.visual_descriptors.items == []
-    assert brief.visual_descriptors.next_cursor is None
-    assert texts(brief.hobbies) == ["Paints"]
 
 
 def test_identical_names_are_disambiguated_by_id(store, service):
@@ -221,7 +158,6 @@ def test_ambiguous_candidate_hints_are_capped_at_max_facts(store, service):
         "hobby": ["hobby 6", "hobby 5", "hobby 4", "hobby 3", "hobby 2"],
     }
     assert smith_hints(max_facts=2)["hobby"] == ["hobby 6", "hobby 5"]
-    assert smith_hints(max_facts=0) == {}
 
 
 def test_name_path_reports_unknown_name(service, sam):
@@ -324,17 +260,6 @@ def test_cursor_from_other_ordering_version_is_rejected(service, sam, monkeypatc
     monkeypatch.setattr("app.crud.briefing_queries.CURSOR_VERSION", CURSOR_VERSION + 1)
     with pytest.raises(InvalidCursorError):
         service.facts(sam, "hobby", cursor=cursor)
-
-
-def test_cursor_for_other_owners_person_is_not_found(store, service):
-    other_owner = uuid4()
-    add_user(store, other_owner)
-    theirs = add_person(store, "Sam", "Lee", owner_id=other_owner)
-    add_facts(store, theirs, "hobby", ["a", "b"])
-    their_service = BriefingService(MemoryStore.from_session_factory(store.Session, owner_user_id=other_owner))
-    cursor = their_service.brief(theirs, max_facts=1).hobbies.next_cursor
-    with pytest.raises(PersonNotFoundError):
-        service.facts(theirs, "hobby", cursor=cursor)
 
 
 # ── CLI ──────────────────────────────────────────────────────

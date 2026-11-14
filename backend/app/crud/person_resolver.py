@@ -26,7 +26,7 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return re.search(pattern, normalized_text) is not None
 
 
-def _person_name(person: Person) -> str:
+def person_name(person: Person) -> str:
     """Return the best available display name for a person."""
 
     return person.display_name or f"{person.first_name} {person.last_name}".strip()
@@ -77,7 +77,7 @@ class PersonResolver:
             return _no_match()
 
         # Pass 1: display-name match
-        name_matches = [p for p in people if _contains_phrase(cleaned, _person_name(p))]
+        name_matches = [p for p in people if _contains_phrase(cleaned, person_name(p))]
         result = self._branch(name_matches)
         if result is not None:
             return result
@@ -117,10 +117,10 @@ class PersonResolver:
         candidates = [
             ResolveCandidate(
                 person_id=p.id,
-                name=_person_name(p),
+                name=person_name(p),
                 hints=self.store.get_disambiguation_hints(p.id),
             )
-            for p in sorted(unique, key=lambda p: _person_name(p).lower())
+            for p in sorted(unique, key=lambda p: person_name(p).lower())
         ]
         return ResolveResult(
             person_id=None,
@@ -139,4 +139,4 @@ def _no_match() -> ResolveResult:
     )
 
 
-__all__ = ["PersonResolver", "is_unnamed"]
+__all__ = ["PersonResolver", "is_unnamed", "person_name"]
