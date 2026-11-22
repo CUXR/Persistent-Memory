@@ -230,6 +230,8 @@ python -m eval.retrieval.data.generate                  # people.jsonl + convers
 python -m eval.retrieval.data.queries                   # queries.jsonl (30 dev / 270 test)
 python -m eval.retrieval.data.load_db --reset
 python -m eval.retrieval.data.show_queries --split dev  # read the dev queries by hand
+python -m eval.retrieval.data.show_conversations        # reading copy: data/review/ (one Markdown file per person)
+python -m eval.retrieval.data.show_queries --out eval/retrieval/data/review/queries.txt   # and all queries with gold labels
 python -m eval.retrieval.jev_study --split dev --pin    # router gateways only: how to apply Jev; writes jev_scoring.json
 python -m eval.retrieval.data.pool_labels               # top-30 pooling + relevance judge completes gold labels
 #   exit code 2 lists "unanswerable" queries that are answerable: run the printed
