@@ -68,3 +68,7 @@ AGENTS.md
 CLAUDE.md
 .claude/
 egomem paper.pdf
+
+# Retrieval benchmark (eval/)
+eval/retrieval/.cache/
+.neon

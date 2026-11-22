@@ -1,0 +1,13 @@
+# Dependencies for the retrieval benchmark (eval/retrieval).
+#
+# These stay out of backend/requirements.txt on purpose: the backend and the
+# default test suite must not need torch, sentence-transformers, or any model
+# download. Install into a separate environment:
+#
+#   python -m venv eval/.venv && eval/.venv/bin/pip install -r eval/requirements.txt
+-r ../backend/requirements.txt
+httpx==0.27.2
+numpy>=1.26
+sentence-transformers>=3.3,<6
+torch>=2.4
+pytest>=8,<10

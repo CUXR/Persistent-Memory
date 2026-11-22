@@ -34,6 +34,9 @@ Persistent-Memory/
 │       └── schema/
 │           └── user.py         # Pydantic schemas
 │
+├── eval/                        # Offline evaluation (own requirements, own venv)
+│   └── retrieval/              # Ranker + query-flow benchmark, synthetic dataset, reports
+│
 └── services/                    # External services and ML
     └── face_recog_local.py     # Local face recognition service
 ```
@@ -137,6 +140,111 @@ python -m pytest            # from backend/ (or `pytest` from the repo root)
 `DATABASE_URL` and `OPENAI_API_KEY` are required at startup; see
 `backend/.env.example` for the commonly used variables and
 `backend/app/core/config.py` for the full list.
+
+### Backend on Neon Postgres (pgvector)
+
+The shared dev database is a [Neon](https://neon.com) project with two branches:
+`dev` (the shared schema) and `eval`, a child of `dev` that holds the retrieval
+benchmark's synthetic data and can be reset without touching `dev`.
+
+1. Sign in and create the project (the CLI runs with `npx`; `neon login` opens
+   a browser, or set `NEON_API_KEY`):
+
+   ```bash
+   npx neonctl@latest login
+   npx neonctl@latest projects create --name persistent-memory --output json
+   npx neonctl@latest branches rename production dev --project-id <project-id>
+   ```
+
+   (A new project's default branch is called `production`; a project that
+   signup created for you can be reused with `projects update <id> --name persistent-memory`.)
+
+2. Enable pgvector and run the migrations on the **direct** connection string
+   (the host without `-pooler`; PgBouncer's transaction pooling does not support
+   the session state migrations need). `DATABASE_URL` uses the psycopg 3 driver
+   and requires TLS:
+
+   ```bash
+   DEV_URL=$(npx neonctl@latest connection-string dev --project-id <project-id>)
+   psql "$DEV_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+   DATABASE_URL="postgresql+psycopg://USER:PASSWORD@ep-xxxx.REGION.aws.neon.tech/neondb?sslmode=require" \
+   OPENAI_API_KEY=unused alembic -c backend/alembic.ini upgrade head
+   ```
+
+   The same `DATABASE_URL=...?sslmode=require` value goes into `backend/.env`
+   for the API. Never commit it.
+
+3. Create the eval branch from `dev` (it inherits the schema and the
+   extension) and reset it whenever the benchmark data should start over:
+
+   ```bash
+   npx neonctl@latest branches create --name eval --parent dev --project-id <project-id>
+   npx neonctl@latest branches reset eval --parent --project-id <project-id>   # back to dev's state
+   ```
+
+   The eval branch's direct connection string is `EVAL_DATABASE_URL` in
+   `eval/.env` (see `eval/.env.example`).
+
+### Retrieval benchmark (`eval/`)
+
+`eval/retrieval` benchmarks which ranker best selects past conversations for a
+query (bge-m3 alone, bge-m3 → bge-reranker-v2-m3, bge-m3 → Jev, Jev over the
+full pool) and how well the whole query flow (extraction → `PersonResolver` →
+padded time filter → ranking → summary-first answering with dialogue fallback)
+answers. Its dependencies stay out of `backend/requirements.txt`; the backend
+test suite never needs them and `python -m pytest -q` downloads nothing.
+
+```bash
+python -m venv eval/.venv && eval/.venv/bin/pip install -r eval/requirements.txt
+cp eval/.env.example eval/.env      # OPENAI_API_KEY (+ EVAL_DATABASE_URL, unless you run with --store memory)
+```
+
+OpenAI is the only paid service it needs (`EVAL_GATEWAY=openai`, the default):
+it writes the dataset text, runs the system under test and judges the answers,
+up to `EVAL_MAX_SPEND_USD` per command. The two local rankers (`bge_m3`,
+`bge_m3_reranker`) cost nothing. The two Jev rankers are not served by OpenAI:
+they run only with `EVAL_GATEWAY=openrouter` or `vercel` and that router's own
+key, and are left out of every command otherwise.
+
+The dataset in `eval/retrieval/data/` (one owner, 40 people, ~800 conversations
+with dialogue and summary, 300 labelled queries) and, once the Jev study has run,
+`eval/retrieval/jev_scoring.json` (the pinned Jev version and how it is applied)
+are committed, so the usual entry point is the runner:
+
+```bash
+eval/.venv/bin/python -m eval.retrieval.data.load_db --reset   # corpus, bge-m3 embeddings and a copy of the queries (eval_queries) into the eval branch
+eval/.venv/bin/python -m eval.retrieval.run --split test       # ranker comparison + system eval
+```
+
+It writes `eval/retrieval/results/<date>.md` and `<date>.json`, resumes from
+`eval/retrieval/.cache/` after an interruption (re-run the printed command), and
+stops at `EVAL_MAX_SPEND_USD`. `--stage rankers|system|report`, `--rankers`,
+`--limit N` and `--store memory` (no database; embeds the corpus locally) narrow a
+run.
+
+Rebuilding the dataset from the seed, in order:
+
+```bash
+python -m eval.retrieval.data.generate --smoke          # optional: six people, to read the prompts' output
+python -m eval.retrieval.data.generate                  # people.jsonl + conversations.jsonl
+python -m eval.retrieval.data.queries                   # queries.jsonl (30 dev / 270 test)
+python -m eval.retrieval.data.load_db --reset
+python -m eval.retrieval.data.show_queries --split dev  # read the dev queries by hand
+python -m eval.retrieval.jev_study --split dev --pin    # router gateways only: how to apply Jev; writes jev_scoring.json
+python -m eval.retrieval.data.pool_labels               # top-30 pooling + relevance judge completes gold labels
+#   exit code 2 lists "unanswerable" queries that are answerable: run the printed
+#   `queries --regenerate ...` command and pool again until it exits 0
+python -m eval.retrieval.run --split dev                # dry run
+python -m eval.retrieval.run --split test
+python -m eval.retrieval.judge_validation sample --records eval/retrieval/.cache/runs/<date>-test/system_records.jsonl --out sample.json
+#   label sample.json by hand, then:
+python -m eval.retrieval.judge_validation score --sample sample.json --labels labels.json
+python -m eval.retrieval.run --split test --stage report
+```
+
+Structure is deterministic from `eval/retrieval/config.py` (`SEED`, the fixed
+clock `NOW`); LLM text is reproduced from the response cache. Run the offline
+tests with `python -m pytest -q eval/tests` from the repo root.
 
 ### Backend with Docker
 ```bash
