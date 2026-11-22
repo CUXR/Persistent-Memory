@@ -131,7 +131,7 @@ result without creating another episode. Failed jobs report the failing stage.
 | New interlocutor | When the face-selected person has no profile, learn the sole unknown speaker's embedding if it is clearly distinct from the wearer. Save it under that existing person ID, without a spoken enrollment prompt. |
 | Ambiguous speakers | Several unknown speakers or an inconclusive wearer comparison remain `unknown`. Existing profiles must use the configured model and are not replaced automatically. |
 | ASR and dialog | Faster Whisper transcribes the actual waveform slice for each turn. Dialog retains speaker ID, role, identified person ID, similarity, timestamps, text, and ASR confidence. Adjacent turns merge only when speaker identity and source file match. Similarity and ASR confidence are separate measurements. |
-| Memory policy | Any ASR exception fails the job. Unknown speakers, overlapping speech, or no confirmed interlocutor require review. Eligible dialogs become named transcripts for summary and fact extraction. |
+| Memory policy | Any ASR exception fails the job. Unknown speakers, overlapping speech of 1 second or more, or no confirmed interlocutor require review. Eligible dialogs become named transcripts for summary and fact extraction. |
 | Commit and retry | The episode, summary, deduplicated facts, relationships, and successful job result commit in one transaction. A failure cannot leave a partially written episode. Audio jobs are owner-scoped and claimed atomically. |
 
 The stream clock advances through silence and across recording splits. Capture
