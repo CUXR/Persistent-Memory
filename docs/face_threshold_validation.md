@@ -5,7 +5,7 @@
 `IndexFlatL2` returns squared L2; on unit-normalized embeddings that equals
 `2 - 2 * cosine_similarity`. The previous prototype value was `1.0` (cosine >= 0.5).
 
-**Chosen default: `1.5`** (cosine >= 0.25).
+**Chosen default: `1.3`** (cosine >= 0.35).
 
 ## Dataset
 
@@ -60,7 +60,10 @@ The old threshold `1.0` gave 0.00% FAR but 7.2% FRR.
 
 ## Decision and tradeoffs
 
-`1.5` measured 0 false accepts in 2,957 different-person pairs (0.00% FAR) at 2.77% FRR. It sits just below the 0.1% FAR target point (1.545), leaving a small margin before FAR starts to rise. The product question
+`1.3` measured 0 false accepts in 2,957 different-person pairs (0.00% FAR) at 3.07% FRR.
+`1.5` rejects slightly fewer true matches (2.77%) but sits just below 1.545, where false
+accepts start (the 0.1% FAR point); `1.3` keeps a wide margin from that edge for almost
+the same FRR. The product question
 is "who is this person", so a false accept (attaching memories to the wrong person)
 is worse than a false reject (a duplicate Unknown person that can be merged later).
 `1.0` is safer on FAR but rejects about 7% of true matches, fragmenting identities.

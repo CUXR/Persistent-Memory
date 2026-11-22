@@ -152,7 +152,7 @@ The index updates immediately, so matching subsequent frames reuse the same ID;
 restarting loads those IDs from the database. Naming the person later must update
 that record, keeping the UUID and voice profile together. Face matching is
 owner-scoped and restricted to the same embedding model. A face matches when its
-squared L2 distance is at most `FACE_MATCH_L2_THRESHOLD` (default `1.5`, validated
+squared L2 distance is at most `FACE_MATCH_L2_THRESHOLD` (default `1.3`, validated
 on LFW; see [docs/face_threshold_validation.md](docs/face_threshold_validation.md)).
 
 With the face dependencies (InsightFace, ONNX Runtime, FAISS, OpenCV) in your venv:
