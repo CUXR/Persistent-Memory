@@ -60,7 +60,7 @@ are not overwritten, and stale job attempts cannot save a profile. Discovery
 turns carry `attribution_method="conversation"` and no independent voice-match
 score; later recordings can use `voice_match` against that stored profile.
 
-Jobs with unresolved identities, cross-talk, or no confirmed interlocutor are
+Jobs with unresolved identities, cross-talk of 1 second or more, or no confirmed interlocutor are
 retained for review without LLM memory extraction. Failed jobs keep their audio
 and any assembled dialog. Terminal successful jobs are not reprocessed. Job
 foreign keys prevent silently deleting referenced users, people, or episodes;

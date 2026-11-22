@@ -25,7 +25,7 @@ mic ─→ VAD capture ─→ WAV ─→ diarization ─→ voice matching ─�
 
 | Component | Where |
 | --- | --- |
-| Face recognition. Unseen faces become a saved "Unknown person" with a stable ID. | `services/face_recog_local.py` |
+| Face recognition. Unseen faces become a saved "Unknown person" with a stable ID. The match threshold is `FACE_MATCH_L2_THRESHOLD` ([validation](docs/face_threshold_validation.md)). | `services/face_recog_local.py` |
 | Interlocutor tracker. Debounces the face-recognition person ID. | `frontend/interlocutorTracker.ts` |
 | Capture (Silero VAD), diarization and voice embeddings (pyannote), speaker matching | `services/audio_pipeline/` |
 | Whisper transcription and dialog assembly | `backend/app/services/asr*.py` |

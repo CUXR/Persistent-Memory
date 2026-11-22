@@ -271,13 +271,22 @@ def test_stale_attempt_cannot_save_a_discovered_voice(store, person, recording, 
     assert setup_service.voices.load(person.id).interlocutor is None
 
 
-def test_cross_talk_requires_review(person, recording, setup_service):
-    setup_service.diarizer.diarize.return_value = [DiarizedTurn(0, 2, "S0"), DiarizedTurn(1.9, 4, "S1")]
+@pytest.mark.parametrize("second_start, status", [
+    (1.9, "complete"),      # 0.1 s overlap
+    (1.1, "complete"),      # 0.9 s overlap
+    (1.0, "needs_review"),  # exactly 1 s
+    (0.5, "needs_review"),  # 1.5 s
+])
+def test_only_overlap_of_a_second_or_more_requires_review(person, recording, setup_service, second_start, status):
+    setup_service.diarizer.diarize.return_value = [DiarizedTurn(0, 2, "S0"), DiarizedTurn(second_start, 4, "S1")]
     # This fixture is about overlap policy, not waveform slice assertions.
     setup_service.asr.transcribe = lambda seg: RawTranscription(segment=seg, text="overlap", avg_logprob=-0.1, no_speech_prob=0)
     result = run(setup_service, recording, person)
-    assert result.status == "needs_review"
-    setup_service.llm.extract_facts.assert_not_called()
+    assert result.status == status
+    if status == "needs_review":
+        setup_service.llm.extract_facts.assert_not_called()
+    else:
+        setup_service.llm.extract_facts.assert_awaited_once()
 
 
 def test_no_speech_is_distinct_from_failure(person, recording, setup_service):

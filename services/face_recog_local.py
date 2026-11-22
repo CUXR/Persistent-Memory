@@ -13,7 +13,6 @@ from app.core.database import SessionLocal
 from app.models.person import Person
 from app.models.user import User
 
-L2_DIST_THRESHOLD = 1.0
 MIN_DETECTION_SCORE = 0.7
 MODEL_NAME = "buffalo_l"
 DET_SIZE = (640, 640)
@@ -39,7 +38,8 @@ def load_all_embeddings(db: Session, user_id: UUID, dim: int):
 
 
 class FaceRecognizer:
-    def __init__(self, db: Session, user_id: UUID, *, detector=None, index_factory=None):
+    def __init__(self, db: Session, user_id: UUID, *, detector=None, index_factory=None,
+                 l2_threshold: float | None = None):
         self.db = db
         self.user_id = user_id
         if db.get(User, user_id) is None:
@@ -53,7 +53,10 @@ class FaceRecognizer:
             index_factory = faiss.IndexFlatL2
         self.app = detector
         self._index_factory = index_factory
-        self.dim = get_settings().embedding_dimension
+        settings = get_settings()
+        self.dim = settings.embedding_dimension
+        # Squared L2 on unit vectors, as returned by IndexFlatL2; set FACE_MATCH_L2_THRESHOLD.
+        self.l2_threshold = settings.face_match_l2_threshold if l2_threshold is None else l2_threshold
         self.rebuild_index()
 
     @staticmethod
@@ -108,7 +111,7 @@ class FaceRecognizer:
             if self.index.ntotal:
                 distances, indices = self.index.search(embedding, 1)
                 distance, index = float(distances[0][0]), int(indices[0][0])
-                if index >= 0 and distance <= L2_DIST_THRESHOLD:
+                if index >= 0 and distance <= self.l2_threshold:
                     candidate = self.db.get(Person, self.person_ids[index])
                     if candidate is not None and candidate.user_id == self.user_id:
                         person = candidate

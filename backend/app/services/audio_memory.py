@@ -14,6 +14,10 @@ from ..schema.audio_job import AudioJobOut
 from .asr import transcribe_segments
 from .conversation_ingestion import ingest_conversation
 
+# Brief overlap (backchannels, laughter, turn handoffs) is normal conversation.
+# Only overlap at least this long between two speakers' turns requires review.
+MIN_REVIEW_OVERLAP_SECONDS = 1.0
+
 
 class AudioMemoryService:
     def __init__(self, store: MemoryStore, diarizer, asr_engine, *, llm_client=None,
@@ -95,7 +99,8 @@ class AudioMemoryService:
             if dialog.errors:
                 raise RuntimeError(f"ASR failed for {len(dialog.errors)} segment(s); recording retained")
             overlap = any(
-                left.speaker_id != right.speaker_id and left.start < right.end and right.start < left.end
+                left.speaker_id != right.speaker_id
+                and min(left.end, right.end) - max(left.start, right.start) >= MIN_REVIEW_OVERLAP_SECONDS
                 for index, left in enumerate(turns) for right in turns[index + 1:]
             )
             if not dialog.turns:
@@ -104,7 +109,7 @@ class AudioMemoryService:
                   or not any(turn.speaker == "interlocutor" for turn in dialog.turns)):
                 self.jobs.update(
                     recording.id, attempt, status="needs_review", stage="attribution",
-                    error="Unknown speaker, overlapping speech, or no confirmed interlocutor; memories not extracted",
+                    error="Unknown speaker, overlapping speech of 1 s or more, or no confirmed interlocutor; memories not extracted",
                 )
             else:
                 stage = "memory"

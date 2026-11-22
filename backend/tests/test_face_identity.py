@@ -61,10 +61,10 @@ def store(tmp_path):
         store.close()
 
 
-def recognizer(store, session, *faces):
+def recognizer(store, session, *faces, **kwargs):
     detector = Mock()
     detector.get.return_value = list(faces)
-    return FaceRecognizer(session, store.owner_user_id, detector=detector, index_factory=FixtureIndex)
+    return FaceRecognizer(session, store.owner_user_id, detector=detector, index_factory=FixtureIndex, **kwargs)
 
 
 def test_unknown_face_is_persisted_and_reused_across_frames_and_restart(store):
@@ -94,6 +94,40 @@ def test_different_unknown_faces_get_distinct_ids_and_no_arbitrary_audio_target(
         assert session.scalar(select(func.count()).select_from(Person)) == 2
         tracker.app.get.return_value = []
         assert tracker.get_current_person_id(None) is None
+
+
+def angled_face(squared_distance):
+    """Unit vector whose squared L2 distance from vector(0) is squared_distance."""
+    cosine = 1 - squared_distance / 2
+    value = np.zeros(512, dtype=np.float32)
+    value[0], value[1] = cosine, np.sqrt(1 - cosine ** 2)
+    return SimpleNamespace(embedding=value, bbox=np.array([0, 0, 100, 100]), det_score=1)
+
+
+@pytest.mark.parametrize('threshold, distance, matches', [
+    (0.6, 0.55, True),
+    (0.6, 0.65, False),
+    (1.2, 1.1, True),
+    (1.2, 1.3, False),
+])
+def test_match_boundary_follows_configured_threshold(store, threshold, distance, matches):
+    with store.Session() as session:
+        recognizer(store, session, face(0), l2_threshold=threshold).recognize_faces(None)
+        probe = recognizer(store, session, angled_face(distance), l2_threshold=threshold)
+        result = probe.recognize_faces(None)[0]
+        assert result['created'] is not matches
+        assert session.scalar(select(func.count()).select_from(Person)) == (1 if matches else 2)
+
+
+def test_threshold_defaults_to_settings(store, monkeypatch):
+    monkeypatch.setenv('FACE_MATCH_L2_THRESHOLD', '0.4')
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+    try:
+        with store.Session() as session:
+            assert recognizer(store, session).l2_threshold == 0.4
+    finally:
+        get_settings.cache_clear()
 
 
 def test_weak_detection_is_not_registered(store):
