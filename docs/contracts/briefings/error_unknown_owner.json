@@ -1,0 +1,13 @@
+{
+  "description": "Missing or malformed X-Owner-Id, or one that names no user (any route).",
+  "request": {
+    "method": "GET",
+    "path": "/people/00000000-0000-4000-8000-0000000000a1/briefing"
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "detail": "X-Owner-Id must name an existing user"
+    }
+  }
+}

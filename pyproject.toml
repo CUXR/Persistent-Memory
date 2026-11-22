@@ -13,6 +13,9 @@ dependencies = [
     "scipy>=1.11,<2",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.28,<1"]
+
 [tool.setuptools.packages.find]
 where = ["backend", "services"]
 include = ["app*", "audio_pipeline*"]
